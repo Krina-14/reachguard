@@ -16,15 +16,19 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.api.findings import findings_router
+from app.api.memory import memory_router
+from app.api.whatif import whatif_router
 from app.auth.router import admin_router, auth_router, limiter
 from app.auth.service import bootstrap_admin
 from app.config import settings
 from app.graph.client import cleanup_sim_graphs, get_db
 from app.graph.schema import ensure_meta_schema
+from app.ingest.router import repos_router
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +168,17 @@ async def health() -> dict:
     }
 
 
+@app.get("/docs", include_in_schema=False)
+async def docs_redirect() -> RedirectResponse:
+    """Redirect /docs to /api/docs."""
+    return RedirectResponse(url="/api/docs")
+
+
 # ── Include routers ─────────────────────────────────────────────
 
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(repos_router)
+app.include_router(findings_router)
+app.include_router(whatif_router)
+app.include_router(memory_router)
