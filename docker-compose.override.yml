@@ -1,0 +1,5 @@
+# Dev override: no password required for FalkorDB
+services:
+  falkordb:
+    environment:
+      REDIS_ARGS: ""
