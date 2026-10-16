@@ -1,7 +1,8 @@
 """
 ReachGuard — Agent Execution Loop.
 
-Orchestrates multi-turn tool calling, explanation fallbacks, and deterministic resolution.
+Orchestrates multi-turn tool calling, explanation fallbacks, deterministic resolution,
+and grounding verification via guardrails.
 Implements:
 1. Mode 'llm_tools': Native multi-turn tool calling (up to 4 rounds, max 6 tool calls).
 2. Mode 'llm_explain': Model explanation from pre-executed tool results.
@@ -12,11 +13,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.fallback import build_fallback_answer
+from app.agent.guardrails import check_grounding
 from app.agent.llm import LLMClient, LLMUnavailable, get_client
 from app.agent.planner import extract_referenced_finding, is_off_topic, plan_intent
 from app.agent.prompts import EXPLAIN_USER_TEMPLATE, SYSTEM_PROMPT
@@ -91,14 +92,6 @@ def _update_evidence(evidence: dict[str, Any], name: str, res: dict[str, Any]) -
         evidence["memory"].append(res)
 
 
-def _check_guardrails(answer: str) -> tuple[bool, str | None]:
-    """Verify that the model adheres to core safety rules."""
-    # Prohibit claims that a package or finding is safe
-    if re.search(r"\b(is safe|are safe|package is safe|it is safe)\b", answer, re.IGNORECASE):
-        return False, "Answer claimed a package is safe (prohibited)."
-    return True, None
-
-
 def run_agent(
     ctx: ToolContext,
     message: str,
@@ -115,6 +108,7 @@ def run_agent(
     evidence: dict[str, Any] = {"findings": [], "traces": [], "memory": []}
     executed_tools: list[dict[str, Any]] = []
     warnings: list[str] = []
+    switch_to_deterministic = False
 
     # Ensure memory context is always pre-seeded if a finding is referenced
     referenced_fid = extract_referenced_finding(ctx.repo_id, message)
@@ -165,21 +159,74 @@ def run_agent(
                         logger.info("Model made zero tool calls on round 0; switching to llm_explain")
                         break
 
-                    # Validate guardrails
-                    passed_guardrail, warn_msg = _check_guardrails(content)
-                    if not passed_guardrail and warn_msg:
-                        warnings.append(warn_msg)
-                        logger.warning("Guardrail failed in llm_tools: %s", warn_msg)
-                        break
+                    # Collect parsed tool outputs for grounding check
+                    parsed_tool_results: list[dict[str, Any]] = []
+                    for m in messages:
+                        if m.get("role") == "tool" and isinstance(m.get("content"), str):
+                            try:
+                                parsed_tool_results.append(json.loads(m["content"]))
+                            except Exception as exc:  # noqa: BLE001
+                                logger.debug("Could not parse tool message JSON: %s", exc)
 
-                    return AgentResult(
-                        answer=content,
-                        mode="llm_tools",
-                        tool_calls=executed_tools,
+                    chk = check_grounding(
+                        answer_text=content,
                         evidence=evidence,
-                        grounded=True,
-                        warnings=warnings,
+                        tool_results=parsed_tool_results,
+                        user_message=message,
+                        repo_id=ctx.repo_id,
                     )
+
+                    if chk["grounded"]:
+                        return AgentResult(
+                            answer=content,
+                            mode="llm_tools",
+                            tool_calls=executed_tools,
+                            evidence=evidence,
+                            grounded=True,
+                            warnings=chk["warnings"],
+                        )
+
+                    # Grounding check failed: retry once with problems appended
+                    logger.warning("Grounding check failed in llm_tools (attempt 1): %s", chk["warnings"])
+                    retry_prompt = (
+                        "Your previous response failed ReachGuard grounding checks:\n"
+                        + "\n".join(f"- {p}" for p in chk["warnings"])
+                        + "\nPlease revise your answer. Rules:\n"
+                        "- Only state facts directly supported by the tool results.\n"
+                        "- Do not invent finding IDs, package versions, or scores.\n"
+                        "- Do not use forbidden phrases such as 'is safe', 'not vulnerable', 'no risk', 'not exploitable', 'safe to ignore', 'I fixed', 'patched it'.\n"
+                        "- Ensure all verdict labels exactly match tool results."
+                    )
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": retry_prompt})
+
+                    retry_resp = llm.chat(messages=messages, tools=None)
+                    retry_content = retry_resp.get("content") or ""
+                    chk_retry = check_grounding(
+                        answer_text=retry_content,
+                        evidence=evidence,
+                        tool_results=parsed_tool_results,
+                        user_message=message,
+                        repo_id=ctx.repo_id,
+                    )
+                    if chk_retry["grounded"]:
+                        return AgentResult(
+                            answer=retry_content,
+                            mode="llm_tools",
+                            tool_calls=executed_tools,
+                            evidence=evidence,
+                            grounded=True,
+                            warnings=chk_retry["warnings"],
+                        )
+
+                    # Second failure: switch to deterministic mode
+                    logger.warning(
+                        "Grounding check failed on retry in llm_tools (attempt 2): %s. Switching to deterministic mode.",
+                        chk_retry["warnings"],
+                    )
+                    warnings.extend(chk_retry["warnings"])
+                    switch_to_deterministic = True
+                    break
 
                 # Process tool calls
                 round_tool_responses: list[dict[str, Any]] = []
@@ -248,7 +295,7 @@ def run_agent(
     # ─────────────────────────────────────────────────────────────
     # Stage 2: Mode 'llm_explain' (Planner tool execution + synthesis)
     # ─────────────────────────────────────────────────────────────
-    if llm_reachable:
+    if not switch_to_deterministic and llm_reachable:
         try:
             planned = plan_intent(ctx, message)
 
@@ -298,20 +345,63 @@ def run_agent(
             ]
 
             resp = llm.chat(messages=explain_messages, tools=None)
-            content = resp.get("content")
+            content = resp.get("content") or ""
             if content:
-                passed_guardrail, warn_msg = _check_guardrails(content)
-                if not passed_guardrail and warn_msg:
-                    warnings.append(warn_msg)
-                else:
+                chk = check_grounding(
+                    answer_text=content,
+                    evidence=evidence,
+                    tool_results=tool_results_for_explain,
+                    user_message=message,
+                    repo_id=ctx.repo_id,
+                )
+                if chk["grounded"]:
                     return AgentResult(
                         answer=content,
                         mode="llm_explain",
                         tool_calls=executed_tools,
                         evidence=evidence,
                         grounded=True,
-                        warnings=warnings,
+                        warnings=chk["warnings"],
                     )
+
+                # Grounding check failed: retry once
+                logger.warning("Grounding check failed in llm_explain (attempt 1): %s", chk["warnings"])
+                retry_prompt = (
+                    "Your previous response failed ReachGuard grounding checks:\n"
+                    + "\n".join(f"- {p}" for p in chk["warnings"])
+                    + "\nPlease revise your answer. Rules:\n"
+                    "- Only state facts directly supported by the tool results.\n"
+                    "- Do not invent finding IDs, package versions, or scores.\n"
+                    "- Do not use forbidden phrases such as 'is safe', 'not vulnerable', 'no risk', 'not exploitable', 'safe to ignore', 'I fixed', 'patched it'.\n"
+                    "- Ensure all verdict labels exactly match tool results."
+                )
+                explain_messages.append({"role": "assistant", "content": content})
+                explain_messages.append({"role": "user", "content": retry_prompt})
+
+                retry_resp = llm.chat(messages=explain_messages, tools=None)
+                retry_content = retry_resp.get("content") or ""
+                chk_retry = check_grounding(
+                    answer_text=retry_content,
+                    evidence=evidence,
+                    tool_results=tool_results_for_explain,
+                    user_message=message,
+                    repo_id=ctx.repo_id,
+                )
+                if chk_retry["grounded"]:
+                    return AgentResult(
+                        answer=retry_content,
+                        mode="llm_explain",
+                        tool_calls=executed_tools,
+                        evidence=evidence,
+                        grounded=True,
+                        warnings=chk_retry["warnings"],
+                    )
+
+                logger.warning(
+                    "Grounding check failed on retry in llm_explain (attempt 2): %s. Switching to deterministic mode.",
+                    chk_retry["warnings"],
+                )
+                warnings.extend(chk_retry["warnings"])
         except (LLMUnavailable, Exception) as exc:  # noqa: BLE001
             logger.warning("Error in llm_explain stage: %s", exc)
 
@@ -349,10 +439,21 @@ def run_agent(
                     "summary": summary_str,
                 })
                 tool_results_for_fallback.append(res)
+    else:
+        tool_results_for_fallback.extend(evidence.get("findings", []))
+        tool_results_for_fallback.extend(evidence.get("traces", []))
 
     fallback_answer = build_fallback_answer(
         evidence=evidence,
         tool_results=tool_results_for_fallback,
+    )
+
+    chk_fallback = check_grounding(
+        answer_text=fallback_answer,
+        evidence=evidence,
+        tool_results=tool_results_for_fallback,
+        user_message=message,
+        repo_id=ctx.repo_id,
     )
 
     return AgentResult(
@@ -360,6 +461,6 @@ def run_agent(
         mode="deterministic",
         tool_calls=executed_tools,
         evidence=evidence,
-        grounded=True,
-        warnings=warnings,
+        grounded=chk_fallback["grounded"],
+        warnings=list(dict.fromkeys(warnings + chk_fallback["warnings"])),
     )
