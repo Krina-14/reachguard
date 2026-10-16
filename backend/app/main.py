@@ -11,8 +11,8 @@ Wires together:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.agent.router import agent_router
 from app.api.findings import findings_router
 from app.api.memory import memory_router
 from app.api.whatif import whatif_router
@@ -46,19 +47,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         ensure_meta_schema()
         logger.info("Meta schema ensured")
     except Exception:
-        logger.error("Failed to ensure meta schema", exc_info=True)
+        logger.exception("Failed to ensure meta schema")
 
     # 2. Clean stale simulation graphs
     try:
         cleanup_sim_graphs()
     except Exception:
-        logger.warning("Failed to clean sim graphs", exc_info=True)
+        logger.exception("Failed to clean sim graphs")
 
     # 3. Bootstrap admin
     try:
         bootstrap_admin()
     except Exception:
-        logger.error("Failed to bootstrap admin", exc_info=True)
+        logger.exception("Failed to bootstrap admin")
 
     yield  # ── app is running ──
 
@@ -104,7 +105,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 
 # Starlette's built-in 404/405 raises StarletteHTTPException, not FastAPI's subclass
-from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -148,7 +149,7 @@ def _check_llm() -> dict:
     try:
         from app.agent.llm import health as llm_health
         return llm_health()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {
             "provider": settings.LLM_PROVIDER,
             "model": settings.LLM_MODEL,
@@ -182,3 +183,4 @@ app.include_router(repos_router)
 app.include_router(findings_router)
 app.include_router(whatif_router)
 app.include_router(memory_router)
+app.include_router(agent_router)
