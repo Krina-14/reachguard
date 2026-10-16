@@ -28,6 +28,7 @@ def format_path(path_dict: dict[str, Any]) -> str:
 def build_fallback_answer(
     evidence: dict[str, Any],
     tool_results: list[dict[str, Any]] | None = None,
+    is_off_topic: bool = False,
 ) -> str:
     """Assemble a grounded, template-based answer from evidence and tool outputs.
 
@@ -41,6 +42,12 @@ def build_fallback_answer(
     - "This is not proof of safety..." when no path was found
     - Actionable next steps based on reachability verdict
     """
+    if is_off_topic:
+        return (
+            "I am ReachGuard's triage assistant focused strictly on repository vulnerability reachability and graph analysis. "
+            "I only handle repository security findings, call paths, and remediation priorities, and cannot assist with general topics such as weather."
+        )
+
     traces = evidence.get("traces", [])
     findings = evidence.get("findings", [])
     memory = evidence.get("memory", [])

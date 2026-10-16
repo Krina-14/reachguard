@@ -18,7 +18,7 @@ from typing import Any
 
 from app.agent.fallback import build_fallback_answer
 from app.agent.llm import LLMClient, LLMUnavailable, get_client
-from app.agent.planner import extract_referenced_finding, plan_intent
+from app.agent.planner import extract_referenced_finding, is_off_topic, plan_intent
 from app.agent.prompts import EXPLAIN_USER_TEMPLATE, SYSTEM_PROMPT
 from app.agent.tools import REGISTRY, TOOL_SCHEMAS, ToolContext, recall
 
@@ -151,7 +151,17 @@ def run_agent(
                     # Model answered with content
                     content = resp.get("content") or ""
                     if round_idx == 0:
-                        # Model made zero tool calls on first round -> switch to llm_explain
+                        # If query is off-topic, model correctly refused tools
+                        if is_off_topic(message):
+                            return AgentResult(
+                                answer=content,
+                                mode="llm_tools",
+                                tool_calls=[],
+                                evidence=evidence,
+                                grounded=True,
+                                warnings=warnings,
+                            )
+                        # Model made zero tool calls on first round for security query -> switch to llm_explain
                         logger.info("Model made zero tool calls on round 0; switching to llm_explain")
                         break
 
@@ -252,6 +262,16 @@ def run_agent(
                     grounded=True,
                 )
 
+            # Check for off-topic query
+            if planned and planned[0][0] == "off_topic":
+                return AgentResult(
+                    answer="I am ReachGuard's triage assistant focused strictly on repository vulnerability reachability and graph analysis. I only handle repository security findings, call paths, and remediation priorities, and cannot assist with general topics such as weather.",
+                    mode="deterministic" if not llm_reachable else "llm_explain",
+                    tool_calls=[],
+                    evidence=evidence,
+                    grounded=True,
+                )
+
             tool_results_for_explain: list[dict[str, Any]] = []
             for tool_name, args in planned:
                 func = REGISTRY.get(tool_name)
@@ -299,6 +319,21 @@ def run_agent(
     # Stage 3: Mode 'deterministic' (Zero network fallback)
     # ─────────────────────────────────────────────────────────────
     tool_results_for_fallback: list[dict[str, Any]] = []
+    if is_off_topic(message):
+        fallback_answer = build_fallback_answer(
+            evidence=evidence,
+            tool_results=[],
+            is_off_topic=True,
+        )
+        return AgentResult(
+            answer=fallback_answer,
+            mode="deterministic",
+            tool_calls=[],
+            evidence=evidence,
+            grounded=True,
+            warnings=warnings,
+        )
+
     if not executed_tools:
         planned = plan_intent(ctx, message)
         for tool_name, args in planned:

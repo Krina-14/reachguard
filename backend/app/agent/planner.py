@@ -15,6 +15,19 @@ from app.agent.tools import ToolContext
 from app.graph import queries
 
 FINDING_ID_PATTERN = re.compile(r"\b[a-f0-9]{12}\b", re.IGNORECASE)
+OFF_TOPIC_PATTERN = re.compile(
+    r"\b(weather|forecast|rain|temperature|recipe|joke|sports|movie|song|poem|crypto|stock\s*price)\b",
+    re.IGNORECASE,
+)
+
+
+def is_off_topic(text: str) -> bool:
+    """Return True if message is unrelated to security or code repository analysis."""
+    lower = text.lower()
+    security_keywords = ("finding", "vuln", "cve", "ghsa", "package", "repo", "reach", "auth", "import", "fix", "path")
+    if any(sk in lower for sk in security_keywords):
+        return False
+    return bool(OFF_TOPIC_PATTERN.search(lower))
 
 
 def extract_finding_ids(text: str) -> list[str]:
@@ -69,6 +82,10 @@ def plan_intent(
       [list_findings]
     """
     text = message.lower()
+
+    # Check for off-topic non-security queries
+    if is_off_topic(message):
+        return [("off_topic", {})]
 
     # Pre-fetch findings to match packages or resolve top findings
     try:
