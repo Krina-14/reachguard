@@ -1,8 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useState,
-} from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { apiFetch, clearToken, getToken, setToken } from "../api/client";
 import type { LoginResponse, User } from "../api/types";
 import { AuthContext, type AuthContextValue } from "./useAuth";
@@ -10,16 +6,17 @@ import { AuthContext, type AuthContextValue } from "./useAuth";
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [token, setTokenState] = useState<string | null>(getToken());
+  const [token, setTokenState] = useState<string | null>(() => getToken());
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Synchronize user profile on initial mount if token exists
+  // On page refresh / mount: restore token from sessionStorage and validate via GET /api/auth/me
   useEffect(() => {
     let isMounted = true;
-    async function loadCurrentUser() {
-      const existingToken = getToken();
-      if (!existingToken) {
+
+    async function validateSession() {
+      const storedToken = getToken();
+      if (!storedToken) {
         if (isMounted) {
           setIsLoading(false);
         }
@@ -30,9 +27,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         const currentUser = await apiFetch<User>("/api/auth/me");
         if (isMounted) {
           setUser(currentUser);
-          setTokenState(existingToken);
+          setTokenState(storedToken);
         }
       } catch {
+        // Token invalid, expired, or server returned 401: clear session
         if (isMounted) {
           clearToken();
           setTokenState(null);
@@ -45,7 +43,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     }
 
-    loadCurrentUser();
+    validateSession();
+
     return () => {
       isMounted = false;
     };

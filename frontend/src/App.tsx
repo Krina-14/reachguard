@@ -2,7 +2,8 @@ import React from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "./auth/AuthContext";
-import { AuthGuard } from "./auth/AuthGuard";
+import { RequireAuth, RequireRole } from "./auth/guards";
+import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/LoginPage";
 import { ReposPage } from "./pages/ReposPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
@@ -25,44 +26,34 @@ export const App: React.FC = () => {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            {/* Public route */}
+            {/* Public authentication route */}
             <Route path="/login" element={<LoginPage />} />
 
-            {/* Protected routes */}
+            {/* Protected routes wrapped in Layout and RequireAuth */}
             <Route
-              path="/"
               element={
-                <AuthGuard>
-                  <ReposPage />
-                </AuthGuard>
+                <RequireAuth>
+                  <Layout />
+                </RequireAuth>
               }
-            />
-            <Route
-              path="/repos/:repoId"
-              element={
-                <AuthGuard>
-                  <RepoDetailPage />
-                </AuthGuard>
-              }
-            />
-            <Route
-              path="/repos/:repoId/findings/:findingId"
-              element={
-                <AuthGuard>
-                  <FindingDetailPage />
-                </AuthGuard>
-              }
-            />
-            <Route
-              path="/admin/users"
-              element={
-                <AuthGuard requiredRole="admin">
-                  <AdminUsersPage />
-                </AuthGuard>
-              }
-            />
+            >
+              <Route path="/" element={<ReposPage />} />
+              <Route path="/repos/:repoId" element={<RepoDetailPage />} />
+              <Route
+                path="/repos/:repoId/findings/:findingId"
+                element={<FindingDetailPage />}
+              />
+              <Route
+                path="/admin/users"
+                element={
+                  <RequireRole roles={["admin"]}>
+                    <AdminUsersPage />
+                  </RequireRole>
+                }
+              />
+            </Route>
 
-            {/* Catch-all 404 */}
+            {/* Catch-all route */}
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </BrowserRouter>
