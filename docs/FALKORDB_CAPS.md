@@ -27,9 +27,11 @@ Python client: `FalkorDB` (pip)
 Based on the results above, the ReachGuard codebase should:
 
 - **Shortest paths**: Cypher `shortestPath(...)` in WITH/RETURN clause is fully supported: `MATCH (a:N {id:'A'}), (c:N {id:'C'}) WITH shortestPath((a)-[:R*..10]->(c)) AS p RETURN p, nodes(p), length(p)`.
-- **Shortest path procedure**: `CALL algo.SPpaths({sourceNode, targetNode, relTypes, pathCount}) YIELD path` is available.
+- **Shortest path procedure**: `CALL algo.SPpaths({sourceNode, targetNode, relTypes, pathCount}) YIELD path` is available and used for algorithm choke point analysis.
 - **Graph copy** (what-if): `graph.copy('target_name')` works.
 - **Parameterized queries**: Fully supported. Always use `$param` syntax.
+- **Critical modules (PageRank)**: `CALL algo.pageRank('Module', 'IMPORTS') YIELD node, score` is supported. In case no algorithm is supported or available on the graph, ReachGuard falls back to the deterministic approximation `reach_centrality` (counting distinct public-entrypoint shortest paths through each module).
+- **Vulnerability clusters (Community Detection Fallback)**: `CALL algo.labelPropagation() YIELD node` returns nodes only without cluster/community IDs. ReachGuard uses the documented fallback: grouping modules that share a public entrypoint ancestor within 2 hops into clusters with reachable findings.
 
 ### Available Procedures
 

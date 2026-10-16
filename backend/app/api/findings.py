@@ -101,3 +101,13 @@ def get_choke_points(
     """Get top 5 choke point packages whose upgrade/removal clears the most reachable findings (viewer+)."""
     check_repo_ready(repo_id)
     return queries.choke_points(repo_id)
+
+
+@findings_router.get("/critical-modules")
+def get_critical_modules(
+    repo_id: str,
+    _current_user: Annotated[dict[str, Any], Depends(require_viewer)],
+) -> list[dict[str, Any]]:
+    """Get top 10 critical modules scored 0-100 (viewer+)."""
+    check_repo_ready(repo_id)
+    return queries.critical_modules(repo_id)

@@ -11,6 +11,7 @@ import datetime
 import json
 import logging
 import re
+import time
 import uuid
 from typing import Any
 
@@ -174,7 +175,10 @@ def trace_paths(
     ORDER BY len ASC
     LIMIT $max_paths
     """
+    t0 = time.perf_counter()
     path_rows = run(g, path_cypher, {"package_id": package_id, "max_paths": max_paths})
+    trace_ms = round((time.perf_counter() - t0) * 1000)
+    logger.info("Trace finding %s completed in %d ms (repo=%s)", finding_id, trace_ms, repo_id)
 
     paths = []
     for row in path_rows:
@@ -327,6 +331,7 @@ def trace_paths(
         "total_public_entrypoints": total_public_ep,
         "blind_spots": blind_spots,
         "searched_scope": searched_scope,
+        "trace_ms": trace_ms,
     }
 
 
@@ -709,16 +714,74 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
         }
 
 
+# ── Critical modules (PageRank) ────────────────────────────────
+
+
+def critical_modules(
+    repo_id: str,
+    graph_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return top 10 critical modules scored 0-100 using PageRank.
+
+    If PageRank is not supported or returns no scores, falls back to a deterministic
+    reach_centrality approximation based on public-entrypoint shortest paths.
+    """
+    g = _select_graph(repo_id, graph_name)
+    try:
+        cypher = """
+        CALL algo.pageRank('Module', 'IMPORTS') YIELD node, score
+        RETURN node.id as module, score
+        ORDER BY score DESC
+        LIMIT 10
+        """
+        rows = run(g, cypher)
+        if rows:
+            max_score = max(r["score"] for r in rows)
+            results = []
+            for r in rows:
+                norm_score = round((r["score"] / max_score) * 100.0, 2) if max_score > 0 else 0.0
+                results.append({"module": r["module"], "score": norm_score})
+            return results
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("algo.pageRank failed, using reach_centrality fallback: %s", exc)
+
+    # Deterministic approximation: count distinct public-entrypoint shortest paths through each module
+    mod_count: dict[str, int] = {}
+    finding_rows = run(g, "MATCH (f:Finding) RETURN f.id as fid")
+    for fr in finding_rows:
+        fid = fr["fid"]
+        trace = trace_paths(repo_id, fid, max_paths=1, graph_name=graph_name)
+        for p in trace.get("paths", []):
+            for n in p.get("nodes", []):
+                if n.get("label") == "Module":
+                    mid = n["id"]
+                    mod_count[mid] = mod_count.get(mid, 0) + 1
+
+    if not mod_count:
+        all_mods = run(g, "MATCH (m:Module) RETURN m.id as mid LIMIT 10")
+        return [{"module": m["mid"], "reach_centrality": 0, "score": 0.0} for m in all_mods]
+
+    max_c = max(mod_count.values())
+    sorted_mods = sorted(mod_count.items(), key=lambda x: -x[1])[:10]
+    return [
+        {
+            "module": mid,
+            "reach_centrality": count,
+            "score": round((count / max_c) * 100.0, 2) if max_c > 0 else 0.0,
+        }
+        for mid, count in sorted_mods
+    ]
+
+
 # ── Choke points (Contract Section 7) ──────────────────────────
 
 
-def choke_points(repo_id: str) -> list[dict[str, Any]]:
-    """Return top 5 packages whose upgrade or removal clears the most reachable findings.
-
-    Counts how many distinct reachable findings pass through each Package node on
-    the shortest path.
-    """
-    g = repo_graph(repo_id)
+def choke_points_counting(
+    repo_id: str,
+    graph_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Existing path-counting method for choke points."""
+    g = _select_graph(repo_id, graph_name)
 
     reachable_f_rows = run(
         g,
@@ -733,7 +796,7 @@ def choke_points(repo_id: str) -> list[dict[str, Any]]:
 
     for row in reachable_f_rows:
         fid = row["fid"]
-        trace = trace_paths(repo_id, fid, max_paths=1)
+        trace = trace_paths(repo_id, fid, max_paths=1, graph_name=graph_name)
         for p in trace.get("paths", []):
             for node in p.get("nodes", []):
                 if node.get("label") == "Package":
@@ -765,6 +828,156 @@ def choke_points(repo_id: str) -> list[dict[str, Any]]:
 
     results.sort(key=lambda x: -x["clears_findings"])
     return results[:5]
+
+
+def choke_points_algorithm(
+    repo_id: str,
+    graph_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """FalkorDB procedure algo.SPpaths version for choke points."""
+    g = _select_graph(repo_id, graph_name)
+    pkgs_with_f = run(
+        g,
+        """
+        MATCH (f:Finding)-[:ON_PACKAGE]->(p:Package)
+        RETURN DISTINCT p.id as pid, p.name as name, p.version as version
+        """,
+    )
+    if not pkgs_with_f:
+        return []
+
+    pkg_finding_map: dict[str, set[str]] = {}
+    pkg_info_map: dict[str, tuple[str, str]] = {}
+
+    for pr in pkgs_with_f:
+        pid = pr["pid"]
+        name = pr["name"] or ""
+        ver = pr["version"] or ""
+        pkg_info_map[pid] = (name, ver)
+
+        sp_res = run(
+            g,
+            """
+            MATCH (e:Entrypoint {public: true}), (p:Package {id: $pid})
+            CALL algo.SPpaths({sourceNode: e, targetNode: p, relTypes: ['HANDLED_BY', 'IMPORTS', 'USES', 'DEPENDS_ON'], pathCount: 1}) YIELD path
+            RETURN path LIMIT 1
+            """,
+            {"pid": pid},
+        )
+        if sp_res:
+            f_rows = run(
+                g,
+                "MATCH (f:Finding)-[:ON_PACKAGE]->(p:Package {id: $pid}) RETURN f.id as fid",
+                {"pid": pid},
+            )
+            for fr in f_rows:
+                pkg_finding_map.setdefault(pid, set()).add(fr["fid"])
+
+    results = []
+    for pid, fids in pkg_finding_map.items():
+        name, ver = pkg_info_map.get(pid, (pid, ""))
+        results.append({
+            "package": name,
+            "version": ver,
+            "clears_findings": len(fids),
+            "finding_ids": sorted(fids),
+        })
+
+    results.sort(key=lambda x: -x["clears_findings"])
+    return results[:5]
+
+
+def choke_points(
+    repo_id: str,
+    graph_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return top 5 packages whose upgrade or removal clears the most reachable findings.
+
+    Tries the FalkorDB algorithm (algo.SPpaths) first; falls back to counting method if needed.
+    """
+    try:
+        return choke_points_algorithm(repo_id, graph_name=graph_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("choke_points_algorithm failed, falling back to counting: %s", exc)
+        return choke_points_counting(repo_id, graph_name=graph_name)
+
+
+# ── Vulnerability clusters ─────────────────────────────────────
+
+
+def vulnerability_clusters(
+    repo_id: str,
+    graph_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Group modules that share a public entrypoint ancestor within 2 hops (fallback),
+    and list reachable findings inside each cluster.
+    """
+    g = _select_graph(repo_id, graph_name)
+    rows = run(
+        g,
+        """
+        MATCH (e:Entrypoint {public: true})-[:HANDLED_BY]->(h:Module)
+        OPTIONAL MATCH (h)-[:IMPORTS]->(m:Module)
+        RETURN e.id as ep_id, h.id as h_id, m.id as m_id
+        """,
+    )
+
+    ep_mods: dict[str, set[str]] = {}
+    for r in rows:
+        eid = r["ep_id"]
+        if eid not in ep_mods:
+            ep_mods[eid] = set()
+        if r["h_id"]:
+            ep_mods[eid].add(r["h_id"])
+        if r["m_id"]:
+            ep_mods[eid].add(r["m_id"])
+
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        if x not in parent:
+            parent[x] = x
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x: str, y: str) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for mods in ep_mods.values():
+        mod_list = sorted(mods)
+        for i in range(1, len(mod_list)):
+            union(mod_list[0], mod_list[i])
+
+    clusters_map: dict[str, set[str]] = {}
+    for mods in ep_mods.values():
+        for m in mods:
+            root = find(m)
+            clusters_map.setdefault(root, set()).add(m)
+
+    results = []
+    sorted_cluster_roots = sorted(clusters_map.keys())
+    for idx, root in enumerate(sorted_cluster_roots, start=1):
+        mod_list = sorted(clusters_map[root])
+        f_rows = run(
+            g,
+            """
+            MATCH (m:Module)-[:IMPORTS|USES|DEPENDS_ON*0..10]->(p:Package)<-[:ON_PACKAGE]-(f:Finding)
+            WHERE m.id IN $mids
+            RETURN DISTINCT f.id as fid
+            """,
+            {"mids": mod_list},
+        )
+        finding_ids = sorted(fr["fid"] for fr in f_rows)
+        results.append({
+            "cluster_id": f"cluster_{idx}",
+            "modules": mod_list,
+            "findings": finding_ids,
+        })
+
+    return results
 
 
 # ── What-if simulate (Contract Section 7 & 9) ──────────────────

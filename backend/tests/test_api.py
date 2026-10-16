@@ -167,6 +167,12 @@ def test_role_matrix(ready_repo: tuple[str, str, str]) -> None:
         ),
         (
             "GET",
+            f"/api/repos/{repo_id}/critical-modules",
+            None,
+            {"unauth": 401, "viewer": 200, "analyst": 200, "admin": 200},
+        ),
+        (
+            "GET",
             f"/api/repos/{repo_id}/memory",
             None,
             {"unauth": 401, "viewer": 200, "analyst": 200, "admin": 200},
@@ -221,6 +227,7 @@ def test_404_unknown_repo() -> None:
     assert client.get(f"/api/repos/{bad_repo}/findings/some-f", headers=headers).status_code == 404
     assert client.get(f"/api/repos/{bad_repo}/graph", headers=headers).status_code == 404
     assert client.get(f"/api/repos/{bad_repo}/choke-points", headers=headers).status_code == 404
+    assert client.get(f"/api/repos/{bad_repo}/critical-modules", headers=headers).status_code == 404
     assert client.get(f"/api/repos/{bad_repo}/memory", headers=headers).status_code == 404
     assert client.post(f"/api/repos/{bad_repo}/whatif", json={"changes": []}, headers=headers).status_code == 404
 
@@ -245,6 +252,7 @@ def test_409_unready_repo(unready_repo: str) -> None:
     headers = _auth_headers("admin")
 
     assert client.get(f"/api/repos/{repo_id}/findings", headers=headers).status_code == 409
+    assert client.get(f"/api/repos/{repo_id}/critical-modules", headers=headers).status_code == 409
     assert client.get(f"/api/repos/{repo_id}/graph", headers=headers).status_code == 409
     assert client.post(f"/api/repos/{repo_id}/whatif", json={"changes": []}, headers=headers).status_code == 409
     assert client.get(f"/api/repos/{repo_id}/memory", headers=headers).status_code == 409
