@@ -16,7 +16,6 @@ Table-driven tests covering:
 from __future__ import annotations
 
 import pytest
-
 from app.scoring import (
     FORMULA_TEXT,
     NO_PROOF_OF_SAFETY_TEXT,
