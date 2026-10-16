@@ -489,7 +489,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "recall",
             "description": (
                 "Recall past investigations, analyst notes, and human risk decisions from memory. "
-                "Use when the user asks what has already been investigated or whether risk was accepted."
+                "Always call this when the user asks what is known about a finding, whether we have seen it before, or asks about prior decisions or notes."
             ),
             "parameters": {
                 "type": "object",

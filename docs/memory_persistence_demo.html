@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReachGuard — Memory Persistence Demo (C10)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(17, 24, 39, 0.85);
+      --border: rgba(255, 255, 255, 0.1);
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.3);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.15);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.15);
+      --danger: #ef4444;
+      --code-bg: #1e293b;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, var(--bg) 75%);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    .header {
+      text-align: center;
+      max-width: 900px;
+      margin-bottom: 32px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #93c5fd;
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+    }
+    /* Flow timeline */
+    .timeline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 1100px;
+      margin-bottom: 36px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 24px;
+      backdrop-filter: blur(12px);
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+    }
+    .step.restart .step-num {
+      background: var(--danger);
+    }
+    .step.recalled .step-num {
+      background: var(--success);
+    }
+    .step-text {
+      font-size: 0.88rem;
+    }
+    .step-title {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .step-sub {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+    .arrow {
+      color: rgba(255, 255, 255, 0.2);
+      font-size: 1.2rem;
+    }
+    /* Main Layout */
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 24px;
+      width: 100%;
+      max-width: 1100px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pill {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .pill-green {
+      background: var(--success-bg);
+      color: #34d399;
+      border: 1px solid rgba(52, 211, 153, 0.3);
+    }
+    .pill-purple {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(192, 132, 252, 0.3);
+    }
+    /* Chat bubbles */
+    .chat-bubble {
+      margin-bottom: 18px;
+      padding: 16px;
+      border-radius: 12px;
+      font-size: 0.93rem;
+      line-height: 1.5;
+    }
+    .user-bubble {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      margin-left: 40px;
+    }
+    .agent-bubble {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid var(--border);
+      margin-right: 20px;
+    }
+    .role-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .user-bubble .role-label {
+      color: #60a5fa;
+    }
+    .agent-bubble .role-label {
+      color: #34d399;
+    }
+    /* Highlight decision box */
+    .decision-callout {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: rgba(245, 158, 11, 0.1);
+      border-left: 4px solid var(--warning);
+      border-radius: 6px;
+      font-size: 0.88rem;
+    }
+    .decision-callout strong {
+      color: #fbbf24;
+    }
+    /* Code block */
+    pre {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 14px;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .json-key { color: #93c5fd; }
+    .json-str { color: #a7f3d0; }
+    .json-val { color: #fde047; }
+    .footer {
+      margin-top: 40px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="badge">Verified Behavior • C10</div>
+    <h1>The Persistence Demo: Graph Memory Check</h1>
+    <p class="subtitle">"The graph decides, the model explains. Memory lives in the graph, not in ephemeral process state."</p>
+  </div>
+
+  <div class="timeline">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text">
+        <div class="step-title">Analyst Chat & Decision</div>
+        <div class="step-sub">save=true, accept_risk created</div>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-text">
+        <div class="step-title">Admin Approval</div>
+        <div class="step-sub">status: approved in FalkorDB</div>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step restart">
+      <div class="step-num">3</div>
+      <div class="step-text">
+        <div class="step-title">Backend Restarted</div>
+        <div class="step-sub">SIGINT killed, LRU wiped</div>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step recalled">
+      <div class="step-num">4</div>
+      <div class="step-text">
+        <div class="step-title">New Session Query</div>
+        <div class="step-sub">Instant Graph Memory Recall</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Chat Card -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <span>💬</span> Fresh Analyst Session
+        </div>
+        <span class="pill pill-purple">Session: Fresh (Post-Restart)</span>
+      </div>
+
+      <div class="chat-bubble user-bubble">
+        <div class="role-label">Analyst (analyst@reachguard.io)</div>
+        Do we know anything about finding 8bc5f7a0c3f7?
+      </div>
+
+      <div class="chat-bubble agent-bubble">
+        <div class="role-label">ReachGuard Triage Assistant • mode: llm_tools</div>
+        <p>The finding <strong>8bc5f7a0c3f7</strong> indicates that Flask is reachable in the model. The exact entrypoints are:</p>
+        <ul style="margin: 8px 0 8px 20px; font-size: 0.88rem; color: #cbd5e1;">
+          <li>GET /iframe-injection</li>
+          <li>GET /idor/profile</li>
+          <li>POST /idor/login</li>
+        </ul>
+        <p>The risk score for this finding is <strong>92</strong>.</p>
+        
+        <div class="decision-callout">
+          <strong>Graph Memory Recall:</strong> The decision to accept the risk was made by <strong>admin@reachguard.io</strong>, who stated that the service is only used internally and is isolated behind a VPC security group without public ingress.
+        </div>
+      </div>
+    </div>
+
+    <!-- Evidence Inspector -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <span>🧠</span> Evidence Inspector (Graph Truth)
+        </div>
+        <span class="pill pill-green">evidence.memory: Non-Empty</span>
+      </div>
+      <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px;">
+        Extracted directly from response JSON returned to the fresh session:
+      </p>
+      <pre><code>{
+  <span class="json-key">"decisions"</span>: [
+    {
+      <span class="json-key">"id"</span>: <span class="json-str">"964651f8b5e3"</span>,
+      <span class="json-key">"type"</span>: <span class="json-str">"accept_risk"</span>,
+      <span class="json-key">"status"</span>: <span class="json-str">"approved"</span>,
+      <span class="json-key">"by"</span>: <span class="json-str">"analyst@reachguard.io"</span>,
+      <span class="json-key">"approved_by"</span>: <span class="json-str">"admin@reachguard.io"</span>,
+      <span class="json-key">"reason"</span>: <span class="json-str">"Internal staging service only; network isolated behind VPC security group without public ingress"</span>
+    }
+  ],
+  <span class="json-key">"investigations"</span>: [
+    {
+      <span class="json-key">"verdict"</span>: <span class="json-str">"reachable_in_model"</span>,
+      <span class="json-key">"score"</span>: <span class="json-val">92</span>
+    }
+  ]
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="footer">
+    ReachGuard Security Intelligence Platform • Contract Sections 7 & 10 Verified
+  </div>
+
+</body>
+</html>

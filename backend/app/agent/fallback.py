@@ -114,7 +114,9 @@ def build_fallback_answer(
             d_by = d.get("by", "user")
             d_date = str(d.get("created_at", ""))[:10]
             d_reason = d.get("reason", "")
-            paragraphs.append(f"Previously: {d_type} by {d_by} on {d_date}: {d_reason}")
+            d_status = d.get("status", "")
+            status_tag = f" ({d_status})" if d_status else ""
+            paragraphs.append(f"Prior decision: {d_type}{status_tag} by {d_by} on {d_date} with reason: '{d_reason}'.")
 
         for inv in investigations:
             inv_by = inv.get("by", "analyst")
@@ -138,7 +140,41 @@ def build_fallback_answer(
 
         return " ".join(paragraphs)
 
-    # 2. Check for choke points tool results
+    # 2. Memory-only response (when recall returned decisions/investigations)
+    if memory:
+        decisions: list[dict[str, Any]] = []
+        investigations: list[dict[str, Any]] = []
+        for m in memory:
+            decisions.extend(m.get("decisions", []))
+            investigations.extend(m.get("investigations", []))
+
+        mem_parts: list[str] = []
+        has_approved_accept_risk = any(
+            d.get("type") == "accept_risk" and d.get("status") == "approved"
+            for d in decisions
+        )
+        if has_approved_accept_risk:
+            mem_parts.append("Status note: Risk has been formally accepted for this finding.")
+
+        for d in decisions:
+            d_type = d.get("type", "decision")
+            d_by = d.get("by", "user")
+            d_date = str(d.get("created_at", ""))[:10]
+            d_reason = d.get("reason", "")
+            d_status = d.get("status", "")
+            status_tag = f" ({d_status})" if d_status else ""
+            mem_parts.append(f"Prior decision: {d_type}{status_tag} by {d_by} on {d_date} with reason: '{d_reason}'.")
+
+        for inv in investigations:
+            inv_by = inv.get("by", "analyst")
+            inv_date = str(inv.get("created_at", ""))[:10]
+            inv_summary = inv.get("summary", "")
+            mem_parts.append(f"Previous investigation by {inv_by} on {inv_date}: {inv_summary}")
+
+        if mem_parts:
+            return " ".join(mem_parts)
+
+    # 3. Check for choke points tool results
     if tool_results:
         for tr in tool_results:
             cps = tr.get("choke_points")

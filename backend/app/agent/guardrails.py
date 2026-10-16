@@ -77,41 +77,47 @@ def _collect_ground_truth(
     known_packages: dict[str, str] = {}
 
     def ingest_finding_dict(d: dict[str, Any]) -> None:
-        fid = d.get("id") or d.get("finding_id")
-        if fid and isinstance(fid, str):
-            fid_clean = fid.lower()
-            if fid_clean not in known_findings:
-                known_findings[fid_clean] = {"scores": set()}
+        candidate_ids = []
+        if d.get("finding_id"):
+            candidate_ids.append(d["finding_id"])
+        if d.get("id"):
+            candidate_ids.append(d["id"])
 
-            for field_name in ("verdict", "package", "version", "severity", "vuln_id"):
-                val = d.get(field_name)
-                if val is not None:
-                    known_findings[fid_clean][field_name] = val
+        for fid in candidate_ids:
+            if fid and isinstance(fid, str):
+                fid_clean = fid.lower()
+                if fid_clean not in known_findings:
+                    known_findings[fid_clean] = {"scores": set()}
 
-            if "score" in d and d["score"] is not None:
-                known_findings[fid_clean]["score"] = d["score"]
-                try:
-                    known_findings[fid_clean]["scores"].add(int(d["score"]))
-                except (ValueError, TypeError):
-                    pass
+                for field_name in ("verdict", "package", "version", "severity", "vuln_id"):
+                    val = d.get(field_name)
+                    if val is not None:
+                        known_findings[fid_clean][field_name] = val
 
-            # Also check score_breakdown if present
-            s_bd = d.get("score_breakdown")
-            if isinstance(s_bd, dict) and "score" in s_bd and s_bd["score"] is not None:
-                known_findings[fid_clean]["score"] = s_bd["score"]
-                try:
-                    known_findings[fid_clean]["scores"].add(int(s_bd["score"]))
-                except (ValueError, TypeError):
-                    pass
+                if "score" in d and d["score"] is not None:
+                    known_findings[fid_clean]["score"] = d["score"]
+                    try:
+                        known_findings[fid_clean]["scores"].add(int(d["score"]))
+                    except (ValueError, TypeError):
+                        pass
 
-            pkg = d.get("package")
-            ver = d.get("version")
-            if pkg and ver and isinstance(pkg, str) and isinstance(ver, str):
-                known_packages[pkg.lower()] = ver
+                # Also check score_breakdown if present
+                s_bd = d.get("score_breakdown")
+                if isinstance(s_bd, dict) and "score" in s_bd and s_bd["score"] is not None:
+                    known_findings[fid_clean]["score"] = s_bd["score"]
+                    try:
+                        known_findings[fid_clean]["scores"].add(int(s_bd["score"]))
+                    except (ValueError, TypeError):
+                        pass
+
+                pkg = d.get("package")
+                ver = d.get("version")
+                if pkg and ver and isinstance(pkg, str) and isinstance(ver, str):
+                    known_packages[pkg.lower()] = ver
 
     def recurse_ingest(item: Any) -> None:
         if isinstance(item, dict):
-            # Check if this dict itself is a finding or trace
+            # Check if this dict itself is a finding, trace, decision, or investigation
             if "id" in item or "finding_id" in item:
                 ingest_finding_dict(item)
 
@@ -126,6 +132,17 @@ def _collect_ground_truth(
                 for t in item["traces"]:
                     if isinstance(t, dict):
                         ingest_finding_dict(t)
+
+            # Ingest decisions and investigations from recall memory
+            if "decisions" in item and isinstance(item["decisions"], list):
+                for dec in item["decisions"]:
+                    if isinstance(dec, dict):
+                        ingest_finding_dict(dec)
+
+            if "investigations" in item and isinstance(item["investigations"], list):
+                for inv in item["investigations"]:
+                    if isinstance(inv, dict):
+                        ingest_finding_dict(inv)
 
             # Recurse into values if tool dicts like {"trace_path": {...}}
             for v in item.values():
@@ -171,6 +188,12 @@ def check_grounding(
             grounded = False
 
     known_findings, known_packages = _collect_ground_truth(evidence, tool_results)
+
+    # Finding IDs explicitly referenced in the user's prompt are valid conversational context
+    if user_message:
+        for ufid in extract_finding_ids(user_message):
+            if ufid.lower() not in known_findings:
+                known_findings[ufid.lower()] = {"scores": set()}
 
     # ─────────────────────────────────────────────────────────────
     # 2. Extract 12-char hex finding IDs

@@ -144,8 +144,8 @@ def plan_intent(
         # Not identifiable -> return clarification request
         return [("clarify_whatif", {})]
 
-    # 4. "before" / "history" / "seen" / "decid" / "remember"
-    if any(kw in text for kw in ("before", "history", "seen", "decid", "remember")):
+    # 4. "before" / "history" / "seen" / "decid" / "remember" / "know" / "anything" / "memory" / "past"
+    if any(kw in text for kw in ("before", "history", "seen", "decid", "remember", "know", "anything", "memory", "past", "investigat", "note")):
         plan = [("recall", {"finding_id": target_fid} if target_fid else {})]
         if target_fid:
             plan.append(("trace_path", {"finding_id": target_fid}))
