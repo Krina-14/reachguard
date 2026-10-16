@@ -99,16 +99,16 @@ class LLMClient:
         except httpx.TimeoutException as exc:
             msg = f"LLM request timed out after {self.timeout_s}s"
             logger.warning("%s: %s", msg, self._sanitize(str(exc)))
-            raise LLMUnavailable(msg) from exc
+            raise LLMUnavailable(msg) from None
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             msg = f"LLM returned HTTP {status_code}"
             logger.warning("%s: %s", msg, self._sanitize(str(exc)))
-            raise LLMUnavailable(msg) from exc
-        except (httpx.RequestError, Exception) as exc:
+            raise LLMUnavailable(msg) from None
+        except (httpx.RequestError, Exception) as exc:  # noqa: BLE001
             msg = f"Failed to connect to LLM at {self.base_url}"
             logger.warning("%s: %s", msg, self._sanitize(str(exc)))
-            raise LLMUnavailable(msg) from exc
+            raise LLMUnavailable(msg) from None
 
         choices = data.get("choices", [])
         if not choices:
@@ -160,10 +160,16 @@ class LLMClient:
         clean = text.strip()
 
         # Unwrap markdown code fence if present
-        if clean.startswith("```"):
-            lines = clean.splitlines()
-            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
-                clean = "\n".join(lines[1:-1]).strip()
+        if "```" in clean:
+            start_fence = clean.find("```")
+            end_fence = clean.rfind("```")
+            if start_fence != -1 and end_fence != -1 and end_fence > start_fence:
+                inner = clean[start_fence + 3 : end_fence].strip()
+                if "\n" in inner:
+                    first_line, rest = inner.split("\n", 1)
+                    if first_line.strip().lower() in ("json", "json5", ""):
+                        inner = rest.strip()
+                clean = inner
 
         if not (clean.startswith("{") and clean.endswith("}")):
             return None
@@ -173,7 +179,12 @@ class LLMClient:
             if not isinstance(parsed, dict):
                 return None
 
-            # Support both ("name", "arguments") and ("tool", "parameters")
+            # Require both name/tool AND arguments/parameters keys
+            has_name = "name" in parsed or "tool" in parsed
+            has_args = "arguments" in parsed or "parameters" in parsed
+            if not (has_name and has_args):
+                return None
+
             name = parsed.get("name") or parsed.get("tool")
             if not name or not isinstance(name, str):
                 return None

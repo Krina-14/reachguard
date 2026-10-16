@@ -6,10 +6,15 @@ Tests:
 - normal answer
 - tool call answer (standard OpenAI tool_calls)
 - tool call as text (plain text JSON and markdown code block fallback)
+- tool call with invalid arguments fallback to empty dict
+- plain text non-tool JSON not converted to tool call
 - 500 error raises LLMUnavailable without key leakage
+- connection error raises LLMUnavailable
 - timeout raises LLMUnavailable
 - provider none returns deterministic mode without network call
 - health check with Ollama model list matching and 15s cache
+- Authorization header added only when api_key is present
+- get_client singleton factory
 """
 
 from __future__ import annotations
@@ -18,12 +23,12 @@ import json
 
 import httpx
 import pytest
-
-from app.agent.llm import LLMClient, LLMUnavailable
+from app.agent.llm import LLMClient, LLMUnavailable, get_client
 
 
 def test_normal_answer() -> None:
     """Mock a standard chat completion response with content."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"
         req_body = json.loads(request.content)
@@ -59,6 +64,7 @@ def test_normal_answer() -> None:
 
 def test_tool_call_answer() -> None:
     """Mock an OpenAI tool-call response."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         resp_data = {
             "choices": [
@@ -101,6 +107,43 @@ def test_tool_call_answer() -> None:
         "arguments": {"finding_id": "find-1"},
     }
     assert res["raw_finish_reason"] == "tool_calls"
+
+
+def test_tool_call_invalid_arguments_json() -> None:
+    """Tool call with invalid JSON string in arguments falls back to empty dict."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        resp_data = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_bad",
+                                "type": "function",
+                                "function": {
+                                    "name": "broken_call",
+                                    "arguments": "invalid JSON string {",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+        return httpx.Response(200, json=resp_data)
+
+    client = LLMClient(
+        base_url="http://mock-llm/v1",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    res = client.chat([{"role": "user", "content": "Run tool"}])
+    assert len(res["tool_calls"]) == 1
+    assert res["tool_calls"][0] == {"name": "broken_call", "arguments": {}}
 
 
 def test_tool_call_as_text() -> None:
@@ -163,6 +206,33 @@ def test_tool_call_as_text() -> None:
     }
 
 
+def test_plain_text_non_tool_json_preserved() -> None:
+    """JSON content that lacks tool call keys should remain as normal content."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        resp_data = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"analysis": "complete", "score": 42}',
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        return httpx.Response(200, json=resp_data)
+
+    client = LLMClient(
+        base_url="http://mock-llm/v1",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    res = client.chat([{"role": "user", "content": "Give json score"}])
+    assert res["content"] == '{"analysis": "complete", "score": 42}'
+    assert res["tool_calls"] == []
+
+
 def test_500_error_raises_llm_unavailable_and_masks_key() -> None:
     """Non-200 responses raise LLMUnavailable and never leak the API key."""
     secret_key = "sk-super-secret-key-12345"
@@ -189,6 +259,7 @@ def test_500_error_raises_llm_unavailable_and_masks_key() -> None:
 
 def test_timeout_raises_llm_unavailable() -> None:
     """Timeout exceptions raise LLMUnavailable."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("Request timed out", request=request)
 
@@ -204,6 +275,25 @@ def test_timeout_raises_llm_unavailable() -> None:
         client.chat([{"role": "user", "content": "Hello"}])
 
     assert "timed out after 5.0s" in str(exc_info.value)
+
+
+def test_connection_error_raises_llm_unavailable() -> None:
+    """Network connection errors raise LLMUnavailable with short message."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Failed to establish connection", request=request)
+
+    transport = httpx.MockTransport(handler)
+    client = LLMClient(
+        base_url="http://mock-llm/v1",
+        model="test-model",
+        transport=transport,
+    )
+
+    with pytest.raises(LLMUnavailable) as exc_info:
+        client.chat([{"role": "user", "content": "Hello"}])
+
+    assert "Failed to connect to LLM at http://mock-llm/v1" in str(exc_info.value)
 
 
 def test_provider_none_health() -> None:
@@ -229,6 +319,37 @@ def test_provider_none_health() -> None:
         "mode": "deterministic",
     }
     assert called is False
+
+
+def test_auth_header_only_when_api_key_set() -> None:
+    """Authorization header is omitted when api_key is None or empty."""
+    headers_seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal headers_seen
+        headers_seen = dict(request.headers)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+        )
+
+    # 1. Without API key
+    client_no_key = LLMClient(
+        base_url="http://mock-llm/v1",
+        api_key="",
+        transport=httpx.MockTransport(handler),
+    )
+    client_no_key.chat([{"role": "user", "content": "hi"}])
+    assert "authorization" not in headers_seen
+
+    # 2. With API key
+    client_with_key = LLMClient(
+        base_url="http://mock-llm/v1",
+        api_key="sk-test-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    client_with_key.chat([{"role": "user", "content": "hi"}])
+    assert headers_seen.get("authorization") == "Bearer sk-test-secret"
 
 
 def test_ollama_health_model_matching_and_cache() -> None:
@@ -279,3 +400,11 @@ def test_ollama_health_model_matching_and_cache() -> None:
     h_missing = client_missing.health(fresh=True)
     assert h_missing["reachable"] is False
     assert h_missing["mode"] == "deterministic"
+
+
+def test_get_client_singleton() -> None:
+    """get_client() returns a singleton LLMClient instance."""
+    c1 = get_client()
+    c2 = get_client()
+    assert c1 is c2
+    assert isinstance(c1, LLMClient)
