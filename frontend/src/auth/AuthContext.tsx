@@ -58,8 +58,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     setToken(res.access_token);
     setTokenState(res.access_token);
-    setUser(res.user);
-    return res.user;
+
+    // Fetch verified profile from /api/auth/me if not directly returned
+    const userProfile =
+      res.user && res.user.role
+        ? res.user
+        : await apiFetch<User>("/api/auth/me");
+
+    setUser(userProfile);
+    return userProfile;
   }, []);
 
   const logout = useCallback(() => {
