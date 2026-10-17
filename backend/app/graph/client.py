@@ -64,6 +64,11 @@ def meta_graph() -> Graph:
     return get_db().select_graph("rg_meta")
 
 
+def global_graph() -> Graph:
+    """Return the singleton cross-repo knowledge graph ``rg_global``."""
+    return get_db().select_graph("rg_global")
+
+
 def repo_graph_name(repo_id: str) -> str:
     """Build a graph name for a repository.
 

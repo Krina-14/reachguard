@@ -116,6 +116,20 @@ def trace_path(ctx: ToolContext, finding_id: str = "", **kwargs: Any) -> dict[st
         res["score_breakdown"] = score_breakdown
         res["score"] = score_breakdown["score"]
         res["ok"] = True
+
+        # Check global recall for cross-repository memory
+        pkg_name = (f_info.get("package") if f_info else "") or ""
+        if pkg_name:
+            global_hits = queries.global_recall(pkg_name)
+            if global_hits:
+                res["global_hits"] = global_hits
+                res["global_recall"] = {
+                    "ok": True,
+                    "package_name": pkg_name,
+                    "hits": global_hits,
+                    "count": len(global_hits),
+                }
+
         return res
     except Exception as exc:  # noqa: BLE001
         logger.warning("Error in trace_path(%s): %s", finding_id, exc)
@@ -402,6 +416,28 @@ def vulnerability_clusters(ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def global_recall(ctx: ToolContext, package_name: str = "", **kwargs: Any) -> dict[str, Any]:
+    """Search rg_global for cross-repository memory on a package or pattern.
+
+    Returns past decisions and patterns learned across repositories.
+    """
+    pkg = package_name.strip()
+    if not pkg:
+        return {"ok": False, "error": "package_name is required"}
+
+    try:
+        hits = queries.global_recall(pkg)
+        return {
+            "ok": True,
+            "package_name": pkg,
+            "hits": hits,
+            "count": len(hits),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Error in global_recall(%s): %s", pkg, exc)
+        return {"ok": False, "error": str(exc)}
+
+
 # ── Registry & Tool Schemas ─────────────────────────────────────
 REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "list_findings": list_findings,
@@ -413,6 +449,7 @@ REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "save_investigation": save_investigation,
     "critical_modules": critical_modules,
     "vulnerability_clusters": vulnerability_clusters,
+    "global_recall": global_recall,
 }
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -611,6 +648,26 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {},
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "global_recall",
+            "description": (
+                "Search rg_global cross-repository memory for previously approved decisions or patterns on a package. "
+                "Answers what past organizational decisions exist for a package across repositories."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package_name": {
+                        "type": "string",
+                        "description": "The package or pattern name to search across repositories (e.g. 'requests', 'urllib3').",
+                    },
+                },
+                "required": ["package_name"],
             },
         },
     },

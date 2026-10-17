@@ -11,7 +11,7 @@ import logging
 
 from falkordb import Graph
 
-from app.graph.client import meta_graph
+from app.graph.client import global_graph, meta_graph
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,19 @@ def ensure_meta_schema() -> None:
     _create_index(g, "User", "email")
     _create_index(g, "User", "id")
     _create_index(g, "Repo", "id")
+
+
+# ── Global graph schema ────────────────────────────────────────
+
+
+def ensure_global_schema() -> None:
+    """Create required indexes on the ``rg_global`` graph.
+
+    Indexes:
+    - Pattern(name)
+    """
+    g = global_graph()
+    _create_index(g, "Pattern", "name")
 
 
 # ── Repo graph schema ─────────────────────────────────────────

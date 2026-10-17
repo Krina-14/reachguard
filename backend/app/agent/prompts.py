@@ -21,7 +21,8 @@ Rules:
 6. When a cluster is returned, explain it as one remediation batch.
 7. When critical_modules is returned, warn when a critical module has no owner.
 8. Recommend next steps (e.g. upgrades, adding authentication, inspecting blind spots), but NEVER claim you modified code or applied fixes.
-9. Keep answers concise, direct, and under 200 words.
+9. When global_recall returns hits for a pattern or package, you MUST include: "This pattern was previously <decision type> on <date> by <user>: <reason>".
+10. Keep answers concise, direct, and under 200 words.
 """
 
 EXPLAIN_USER_TEMPLATE: str = """The user asked: {message}

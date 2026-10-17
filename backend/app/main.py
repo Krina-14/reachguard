@@ -28,7 +28,7 @@ from app.auth.router import admin_router, auth_router, limiter
 from app.auth.service import bootstrap_admin
 from app.config import settings
 from app.graph.client import cleanup_sim_graphs, get_db
-from app.graph.schema import ensure_meta_schema
+from app.graph.schema import ensure_global_schema, ensure_meta_schema
 from app.ingest.router import repos_router
 
 logger = logging.getLogger(__name__)
@@ -45,9 +45,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # 1. Schema indexes
     try:
         ensure_meta_schema()
-        logger.info("Meta schema ensured")
+        ensure_global_schema()
+        logger.info("Meta and global schema ensured")
     except Exception:
-        logger.exception("Failed to ensure meta schema")
+        logger.exception("Failed to ensure schemas")
 
     # 2. Clean stale simulation graphs
     try:

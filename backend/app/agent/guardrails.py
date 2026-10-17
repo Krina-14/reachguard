@@ -188,6 +188,14 @@ def _collect_ground_truth(
                     if isinstance(inv, dict):
                         ingest_finding_dict(inv)
 
+            if "hits" in item and isinstance(item["hits"], list):
+                for hit in item["hits"]:
+                    if isinstance(hit, dict):
+                        ingest_finding_dict(hit)
+                        pkg_hit = hit.get("package_name") or hit.get("pattern_name")
+                        if pkg_hit and isinstance(pkg_hit, str):
+                            known_packages[pkg_hit.lower()] = ""
+
             # Recurse into values if tool dicts like {"trace_path": {...}}
             for v in item.values():
                 if isinstance(v, (dict, list)):
@@ -277,7 +285,14 @@ def extract_mentioned_modules(text: str) -> list[str]:
     for m in dotted_re.finditer(text):
         cand = m.group(1).strip("`'\".,;:()")
         lower = cand.lower()
-        if not any(lower.endswith(ext) for ext in (".com", ".org", ".net", ".io", ".json", ".md", ".txt", ".html")):
+        # Skip emails and common domain or file extensions
+        preceding = text[max(0, m.start() - 20) : m.start()]
+        if "@" in preceding:
+            continue
+        if not any(
+            lower.endswith(ext)
+            for ext in (".com", ".org", ".net", ".io", ".internal", ".local", ".dev", ".edu", ".gov", ".json", ".md", ".txt", ".html")
+        ):
             candidates.append(cand)
 
     # 5. Bullet list items: "* good.vulpy", "- app.views"

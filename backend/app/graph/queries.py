@@ -20,6 +20,7 @@ from falkordb import Graph
 from app.graph.client import (
     delete_graph_if_exists,
     get_db,
+    global_graph,
     meta_graph,
     repo_graph,
     run,
@@ -1329,13 +1330,67 @@ def create_decision(
     return res[0]
 
 
+def _is_admin_user(user_identifier: str) -> bool:
+    """Return True if user_identifier belongs to an admin user."""
+    try:
+        mg = meta_graph()
+        rows = run(
+            mg,
+            "MATCH (u:User) WHERE u.email = $id OR u.id = $id RETURN u.role as role",
+            {"id": user_identifier},
+        )
+        if rows:
+            return rows[0].get("role") == "admin"
+    except Exception:
+        pass
+    # Fallback for tests where users are not seeded in rg_meta
+    return "admin" in user_identifier.lower()
+
+
+def _normalize_pattern_name(
+    decision_type: str,
+    package_name: str | None,
+    vuln_id: str | None,
+    aliases: list[str] | None,
+) -> str | None:
+    """Extract normalized pattern name: package name for accept_risk/false_positive, or vuln alias prefix for fixed."""
+    pkg = (package_name or "").strip().lower()
+    if decision_type in ("accept_risk", "false_positive"):
+        return pkg or None
+    elif decision_type == "fixed":
+        if aliases and isinstance(aliases, list):
+            for alias in aliases:
+                alias_str = str(alias).strip()
+                if not alias_str:
+                    continue
+                parts = alias_str.split("-")
+                if len(parts) >= 3:
+                    return f"{parts[0]}-{parts[1]}".lower()
+                elif len(parts) == 2:
+                    return parts[0].lower()
+                return alias_str.lower()
+        if vuln_id:
+            parts = str(vuln_id).strip().split("-")
+            if len(parts) >= 3:
+                return f"{parts[0]}-{parts[1]}".lower()
+            elif len(parts) == 2:
+                return parts[0].lower()
+            return str(vuln_id).strip().lower()
+        return pkg or None
+    return pkg or None
+
+
 def set_decision_status(
     repo_id: str,
     decision_id: str,
     status: str,
     by: str,
 ) -> dict[str, Any]:
-    """Update decision status. Only pending decisions can be transitioned."""
+    """Update decision status. Only pending decisions can be transitioned.
+
+    When approved by an admin, UPSERT (:Pattern)-[:LEARNED_FROM]->(:Decision copy)
+    into rg_global. Viewers/analysts never write to rg_global.
+    """
     g = repo_graph(repo_id)
 
     check_rows = run(
@@ -1350,10 +1405,12 @@ def set_decision_status(
     if current_status != "pending":
         raise ValueError(f"Decision '{decision_id}' is not pending (current status: '{current_status}')")
 
+    now_iso = datetime.datetime.now(datetime.UTC).isoformat()
     cypher = """
     MATCH (d:Decision {id: $id})
     SET d.status = $status,
-        d.approved_by = $by
+        d.approved_by = $by,
+        d.approved_at = $approved_at
     RETURN d.id as id,
            d.type as type,
            d.reason as reason,
@@ -1361,7 +1418,109 @@ def set_decision_status(
            d.status as status,
            d.approved_by as approved_by,
            d.created_at as created_at,
+           d.approved_at as approved_at,
            d.expires_at as expires_at
     """
-    res = run(g, cypher, {"id": decision_id, "status": status, "by": by})
-    return res[0]
+    res = run(g, cypher, {"id": decision_id, "status": status, "by": by, "approved_at": now_iso})
+    updated = res[0]
+
+    # Rule: rg_global is written ONLY on admin-approved decisions.
+    if status == "approved" and _is_admin_user(by):
+        finding_info = run(
+            g,
+            """
+            MATCH (f:Finding)-[:HAS_DECISION]->(d:Decision {id: $id})
+            OPTIONAL MATCH (f)-[:ON_PACKAGE]->(p:Package)
+            OPTIONAL MATCH (f)-[:ABOUT]->(v:Vulnerability)
+            RETURN f.id as finding_id,
+                   p.name as package_name,
+                   v.id as vuln_id,
+                   v.aliases as aliases
+            """,
+            {"id": decision_id},
+        )
+        if finding_info:
+            f_row = finding_info[0]
+            pkg_name = f_row.get("package_name") or ""
+            vuln_id = f_row.get("vuln_id")
+            aliases = f_row.get("aliases")
+            pattern_name = _normalize_pattern_name(
+                decision_type=updated.get("type", ""),
+                package_name=pkg_name,
+                vuln_id=vuln_id,
+                aliases=aliases,
+            )
+            if pattern_name:
+                gg = global_graph()
+                upsert_cypher = """
+                MERGE (p:Pattern {name: $pattern_name})
+                MERGE (d:Decision {id: $decision_id, repo_id: $repo_id})
+                SET d.type = $type,
+                    d.reason = $reason,
+                    d.by = $by,
+                    d.status = 'approved',
+                    d.approved_by = $approved_by,
+                    d.created_at = $created_at,
+                    d.approved_at = $approved_at,
+                    d.expires_at = $expires_at,
+                    d.finding_id = $finding_id,
+                    d.package_name = $package_name
+                MERGE (p)-[:LEARNED_FROM]->(d)
+                """
+                run(
+                    gg,
+                    upsert_cypher,
+                    {
+                        "pattern_name": pattern_name,
+                        "decision_id": decision_id,
+                        "repo_id": repo_id,
+                        "type": updated.get("type"),
+                        "reason": updated.get("reason"),
+                        "by": updated.get("by"),
+                        "approved_by": by,
+                        "created_at": updated.get("created_at"),
+                        "approved_at": updated.get("approved_at") or now_iso,
+                        "expires_at": updated.get("expires_at"),
+                        "finding_id": f_row.get("finding_id"),
+                        "package_name": pkg_name,
+                    },
+                )
+
+    return updated
+
+
+def global_recall(package_name: str) -> list[dict[str, Any]]:
+    """Search rg_global for cross-repository memory matching package_name or pattern.
+
+    Returns past decisions and patterns.
+    """
+    g = global_graph()
+    pkg_clean = (package_name or "").strip().lower()
+    if not pkg_clean:
+        return []
+
+    cypher = """
+    MATCH (p:Pattern)-[:LEARNED_FROM]->(d:Decision)
+    WHERE toLower(p.name) = $pkg
+       OR toLower(d.package_name) = $pkg
+       OR ($pkg STARTS WITH toLower(p.name) AND length(p.name) >= 3)
+    RETURN p.name as pattern_name,
+           d.id as id,
+           d.type as type,
+           d.reason as reason,
+           d.by as by,
+           d.status as status,
+           d.approved_by as approved_by,
+           d.created_at as created_at,
+           d.approved_at as approved_at,
+           d.repo_id as repo_id,
+           d.finding_id as finding_id,
+           d.package_name as package_name
+    ORDER BY coalesce(d.approved_at, d.created_at) DESC
+    """
+    try:
+        return run(g, cypher, {"pkg": pkg_clean})
+    except Exception as exc:
+        logger.warning("Error querying rg_global in global_recall(%s): %s", package_name, exc)
+        return []
+

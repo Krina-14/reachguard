@@ -83,6 +83,10 @@ def _format_tool_summary(name: str, args: dict[str, Any], res: dict[str, Any]) -
     if name == "vulnerability_clusters":
         cnt = res.get("count", len(res.get("clusters", [])))
         return f"vulnerability_clusters(): {cnt} clusters"
+    if name == "global_recall":
+        pkg = args.get("package_name", "")
+        cnt = res.get("count", len(res.get("hits", [])))
+        return f"global_recall({pkg}): {cnt} global pattern hits"
     return f"{name}(): ok={res.get('ok', True)}"
 
 
@@ -100,6 +104,52 @@ def _update_evidence(evidence: dict[str, Any], name: str, res: dict[str, Any]) -
         evidence.setdefault("modules", []).extend(res.get("modules", []))
     elif name == "vulnerability_clusters":
         evidence.setdefault("clusters", []).extend(res.get("clusters", []))
+    elif name == "global_recall":
+        evidence.setdefault("global_recall", []).extend(res.get("hits", []))
+
+
+def _ensure_global_recall_phrase(answer: str, evidence: dict[str, Any]) -> str:
+    """Ensure that the exact required sentence:
+    'This pattern was previously <decision type> on <date> by <user>: <reason>'
+    is present in the answer if global recall hits exist.
+    """
+    global_hits = evidence.get("global_recall", [])
+    if not global_hits:
+        for t in evidence.get("traces", []):
+            if t.get("global_hits"):
+                global_hits = t.get("global_hits")
+                break
+    if not global_hits:
+        return answer
+
+    # Format the most recent global hit (global_recall orders DESC)
+    hit = global_hits[0]
+    d_type = hit.get("type", "decision")
+    d_date = str(hit.get("approved_at") or hit.get("created_at") or "")[:10]
+    d_user = hit.get("approved_by") or hit.get("by") or "admin"
+    d_reason = hit.get("reason", "")
+    required_phrase = f"This pattern was previously {d_type} on {d_date} by {d_user}: {d_reason}"
+
+    if required_phrase in answer:
+        return answer
+
+    if "This pattern was previously " in answer:
+        lines = answer.split("\n")
+        new_lines = []
+        replaced = False
+        for line in lines:
+            if "This pattern was previously " in line and not replaced:
+                new_lines.append(required_phrase)
+                replaced = True
+            elif "This pattern was previously " in line:
+                continue
+            else:
+                new_lines.append(line)
+        if not replaced:
+            new_lines.append(required_phrase)
+        return "\n".join(new_lines)
+
+    return answer.strip() + f"\n\n{required_phrase}"
 
 
 def run_agent(
@@ -188,7 +238,7 @@ def run_agent(
 
                     if chk["grounded"]:
                         return AgentResult(
-                            answer=content,
+                            answer=_ensure_global_recall_phrase(content, evidence),
                             mode="llm_tools",
                             tool_calls=executed_tools,
                             evidence=evidence,
@@ -221,7 +271,7 @@ def run_agent(
                     )
                     if chk_retry["grounded"]:
                         return AgentResult(
-                            answer=retry_content,
+                            answer=_ensure_global_recall_phrase(retry_content, evidence),
                             mode="llm_tools",
                             tool_calls=executed_tools,
                             evidence=evidence,
@@ -280,6 +330,27 @@ def run_agent(
                             "name": name,
                             "content": json.dumps(res),
                         })
+
+                        # If trace_path found global hits, trigger global_recall
+                        if name == "trace_path" and res.get("global_hits"):
+                            pkg = res.get("global_recall", {}).get("package_name") or ""
+                            if pkg:
+                                gr_func = REGISTRY.get("global_recall")
+                                if gr_func:
+                                    gr_res = gr_func(ctx, package_name=pkg)
+                                    _update_evidence(evidence, "global_recall", gr_res)
+                                    gr_summary = _format_tool_summary("global_recall", {"package_name": pkg}, gr_res)
+                                    executed_tools.append({
+                                        "name": "global_recall",
+                                        "args": {"package_name": pkg},
+                                        "ok": gr_res.get("ok", True),
+                                        "summary": gr_summary,
+                                    })
+                                    round_tool_responses.append({
+                                        "role": "tool",
+                                        "name": "global_recall",
+                                        "content": json.dumps(gr_res),
+                                    })
 
                 if round_idx == 0 and not made_valid_call_round_0:
                     logger.info("No valid tool calls in round 0; switching to llm_explain")
@@ -344,6 +415,23 @@ def run_agent(
                     })
                     tool_results_for_explain.append({tool_name: res})
 
+                    # If trace_path found global hits, trigger global_recall
+                    if tool_name == "trace_path" and res.get("global_hits"):
+                        pkg = res.get("global_recall", {}).get("package_name") or ""
+                        if pkg:
+                            gr_func = REGISTRY.get("global_recall")
+                            if gr_func:
+                                gr_res = gr_func(ctx, package_name=pkg)
+                                _update_evidence(evidence, "global_recall", gr_res)
+                                gr_summary = _format_tool_summary("global_recall", {"package_name": pkg}, gr_res)
+                                executed_tools.append({
+                                    "name": "global_recall",
+                                    "args": {"package_name": pkg},
+                                    "ok": gr_res.get("ok", True),
+                                    "summary": gr_summary,
+                                })
+                                tool_results_for_explain.append({"global_recall": gr_res})
+
             explain_user_content = EXPLAIN_USER_TEMPLATE.format(
                 message=message,
                 tool_results_json=json.dumps(tool_results_for_explain, indent=2),
@@ -366,7 +454,7 @@ def run_agent(
                 )
                 if chk["grounded"]:
                     return AgentResult(
-                        answer=content,
+                        answer=_ensure_global_recall_phrase(content, evidence),
                         mode="llm_explain",
                         tool_calls=executed_tools,
                         evidence=evidence,
@@ -399,7 +487,7 @@ def run_agent(
                 )
                 if chk_retry["grounded"]:
                     return AgentResult(
-                        answer=retry_content,
+                        answer=_ensure_global_recall_phrase(retry_content, evidence),
                         mode="llm_explain",
                         tool_calls=executed_tools,
                         evidence=evidence,
@@ -449,6 +537,23 @@ def run_agent(
                     "summary": summary_str,
                 })
                 tool_results_for_fallback.append(res)
+
+                # If trace_path found global hits, trigger global_recall
+                if tool_name == "trace_path" and res.get("global_hits"):
+                    pkg = res.get("global_recall", {}).get("package_name") or ""
+                    if pkg:
+                        gr_func = REGISTRY.get("global_recall")
+                        if gr_func:
+                            gr_res = gr_func(ctx, package_name=pkg)
+                            _update_evidence(evidence, "global_recall", gr_res)
+                            gr_summary = _format_tool_summary("global_recall", {"package_name": pkg}, gr_res)
+                            executed_tools.append({
+                                "name": "global_recall",
+                                "args": {"package_name": pkg},
+                                "ok": gr_res.get("ok", True),
+                                "summary": gr_summary,
+                            })
+                            tool_results_for_fallback.append(gr_res)
     else:
         tool_results_for_fallback.extend(evidence.get("findings", []))
         tool_results_for_fallback.extend(evidence.get("traces", []))

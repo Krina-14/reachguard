@@ -124,6 +124,18 @@ def build_fallback_answer(
             inv_summary = inv.get("summary", "")
             paragraphs.append(f"Previous investigation by {inv_by} on {inv_date}: {inv_summary}")
 
+        # Global pattern memory (latest hit)
+        global_hits = evidence.get("global_recall", [])
+        if not global_hits and trace.get("global_hits"):
+            global_hits = trace.get("global_hits", [])
+        if global_hits:
+            hit = global_hits[0]
+            d_type = hit.get("type", "decision")
+            d_date = str(hit.get("approved_at") or hit.get("created_at") or "")[:10]
+            d_user = hit.get("approved_by") or hit.get("by") or "admin"
+            d_reason = hit.get("reason", "")
+            paragraphs.append(f"This pattern was previously {d_type} on {d_date} by {d_user}: {d_reason}")
+
         # No proof of safety
         if verdict == "no_path_found":
             paragraphs.append(NO_PROOF_OF_SAFETY_TEXT)
@@ -140,8 +152,9 @@ def build_fallback_answer(
 
         return " ".join(paragraphs)
 
-    # 2. Memory-only response (when recall returned decisions/investigations)
-    if memory:
+    # 2. Memory / Global pattern response
+    global_hits = evidence.get("global_recall", [])
+    if memory or global_hits:
         decisions: list[dict[str, Any]] = []
         investigations: list[dict[str, Any]] = []
         for m in memory:
@@ -170,6 +183,14 @@ def build_fallback_answer(
             inv_date = str(inv.get("created_at", ""))[:10]
             inv_summary = inv.get("summary", "")
             mem_parts.append(f"Previous investigation by {inv_by} on {inv_date}: {inv_summary}")
+
+        if global_hits:
+            hit = global_hits[0]
+            d_type = hit.get("type", "decision")
+            d_date = str(hit.get("approved_at") or hit.get("created_at") or "")[:10]
+            d_user = hit.get("approved_by") or hit.get("by") or "admin"
+            d_reason = hit.get("reason", "")
+            mem_parts.append(f"This pattern was previously {d_type} on {d_date} by {d_user}: {d_reason}")
 
         if mem_parts:
             return " ".join(mem_parts)
