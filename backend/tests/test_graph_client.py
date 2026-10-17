@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from app.config import settings
 from app.graph.client import (
     cleanup_sim_graphs,
     delete_graph_if_exists,
@@ -55,7 +56,7 @@ class TestRepoGraphName:
     def test_accepts_valid_uuid4(self) -> None:
         uid = str(uuid.uuid4())
         name = repo_graph_name(uid)
-        assert name.startswith("rg_repo_")
+        assert name.startswith(f"{settings.GRAPH_PREFIX}_repo_")
         assert "-" not in name  # dashes replaced with underscores
         assert uid.replace("-", "_") in name
 
@@ -92,7 +93,7 @@ class TestRepoGraphName:
 class TestSimGraphName:
     def test_prefix(self) -> None:
         name = sim_graph_name()
-        assert name.startswith("rg_sim_")
+        assert name.startswith(f"{settings.GRAPH_PREFIX}_sim_")
 
     def test_uniqueness(self) -> None:
         names = {sim_graph_name() for _ in range(20)}
@@ -103,9 +104,10 @@ class TestSimGraphName:
 
 
 class TestMetaGraph:
-    def test_returns_graph_named_rg_meta(self) -> None:
+    def test_returns_graph_named_meta(self) -> None:
         g = meta_graph()
         assert isinstance(g, Graph)
+        assert g.name == f"{settings.GRAPH_PREFIX}_meta"
 
 
 # ── run() round-trip ────────────────────────────────────────────

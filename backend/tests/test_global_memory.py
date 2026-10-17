@@ -21,6 +21,7 @@ import pytest
 from app.agent.loop import run_agent
 from app.agent.tools import ToolContext
 from app.agent.tools import global_recall as global_recall_tool
+from app.config import settings
 from app.graph import queries
 from app.graph.client import (
     delete_graph_if_exists,
@@ -58,9 +59,9 @@ def clean_global_patterns() -> Generator[list[str], None, None]:
 
 
 def test_global_graph_and_schema() -> None:
-    """Verify global_graph returns rg_global and schema creates Pattern(name) index idempotently."""
+    """Verify global_graph returns <prefix>_global and schema creates Pattern(name) index idempotently."""
     g = global_graph()
-    assert g.name == "rg_global"
+    assert g.name == f"{settings.GRAPH_PREFIX}_global"
 
     # Schema creation must be idempotent
     ensure_global_schema()

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     FALKORDB_HOST: str = "localhost"
     FALKORDB_PORT: int = 6379
     FALKORDB_PASSWORD: str = ""
+    GRAPH_PREFIX: str = "rg"
 
     # ── Authentication ───────────────────────────────────────
     JWT_SECRET: str = ""

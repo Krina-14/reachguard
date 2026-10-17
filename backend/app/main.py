@@ -57,7 +57,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("Failed to clean sim graphs")
 
-    # 3. Bootstrap admin
+    # 3. Startup reaper: mark in-progress repos older than 15 minutes as failed
+    try:
+        from app.ingest.router import reap_stale_repos
+
+        reaped = reap_stale_repos(max_age_minutes=15)
+        if reaped > 0:
+            logger.info("Startup reaper marked %d stale repos as failed", reaped)
+    except Exception:
+        logger.exception("Failed to run startup reaper")
+
+    # 4. Bootstrap admin
     try:
         bootstrap_admin()
     except Exception:

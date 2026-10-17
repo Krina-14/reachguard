@@ -59,26 +59,41 @@ def _validate_uuid4(value: str) -> str:
     return value
 
 
+def _prefix() -> str:
+    p = settings.GRAPH_PREFIX.strip() if settings.GRAPH_PREFIX else "rg"
+    return p
+
+
+def meta_graph_name() -> str:
+    """Return the meta-graph name."""
+    return f"{_prefix()}_meta"
+
+
 def meta_graph() -> Graph:
-    """Return the singleton meta-graph ``rg_meta``."""
-    return get_db().select_graph("rg_meta")
+    """Return the singleton meta-graph ``<prefix>_meta``."""
+    return get_db().select_graph(meta_graph_name())
+
+
+def global_graph_name() -> str:
+    """Return the cross-repo knowledge graph name."""
+    return f"{_prefix()}_global"
 
 
 def global_graph() -> Graph:
-    """Return the singleton cross-repo knowledge graph ``rg_global``."""
-    return get_db().select_graph("rg_global")
+    """Return the singleton cross-repo knowledge graph ``<prefix>_global``."""
+    return get_db().select_graph(global_graph_name())
 
 
 def repo_graph_name(repo_id: str) -> str:
     """Build a graph name for a repository.
 
     ``repo_id`` must be a valid UUID4 string.  The returned name is
-    ``"rg_repo_"`` followed by the UUID with dashes replaced by underscores.
+    ``f"{prefix}_repo_"`` followed by the UUID with dashes replaced by underscores.
 
     This is the **ONLY** place repository graph names are constructed.
     """
     _validate_uuid4(repo_id)
-    return "rg_repo_" + repo_id.replace("-", "_")
+    return f"{_prefix()}_repo_" + repo_id.replace("-", "_")
 
 
 def repo_graph(repo_id: str) -> Graph:
@@ -87,8 +102,8 @@ def repo_graph(repo_id: str) -> Graph:
 
 
 def sim_graph_name() -> str:
-    """Generate a unique simulation graph name (``rg_sim_<hex>``)."""
-    return "rg_sim_" + uuid.uuid4().hex
+    """Generate a unique simulation graph name (``<prefix>_sim_<hex>``)."""
+    return f"{_prefix()}_sim_" + uuid.uuid4().hex
 
 
 # ── Query runner ────────────────────────────────────────────────
@@ -128,13 +143,15 @@ def delete_graph_if_exists(name: str) -> None:
 
 
 def cleanup_sim_graphs() -> None:
-    """Delete every graph whose name starts with ``rg_sim_``.
+    """Delete every graph whose name starts with ``<prefix>_sim_`` or ``rg_sim_``.
 
     Called at application startup to remove stale simulation graphs.
     """
     db = get_db()
+    prefix = _prefix()
+    sim_prefixes = (f"{prefix}_sim_", "rg_sim_")
     for name in db.list_graphs():
-        if name.startswith("rg_sim_"):
+        if any(name.startswith(p) for p in sim_prefixes):
             try:
                 db.select_graph(name).delete()
                 logger.info("Cleaned up simulation graph %s", name)

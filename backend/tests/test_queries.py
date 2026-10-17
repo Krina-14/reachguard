@@ -24,6 +24,7 @@ import uuid
 from collections.abc import Generator
 
 import pytest
+from app.config import settings
 from app.graph.client import delete_graph_if_exists, get_db, repo_graph, repo_graph_name
 from app.graph.queries import (
     choke_points,
@@ -219,7 +220,7 @@ def test_simulate_flips_reachable_to_no_path_found(tiny_repo: tuple[str, Graph])
     assert after_real["verdict"] == "reachable_in_model"
 
     # Assert no leftover simulation graphs exist
-    leftovers = [name for name in db.list_graphs() if name.startswith("rg_sim_")]
+    leftovers = [name for name in db.list_graphs() if name.startswith(f"{settings.GRAPH_PREFIX}_sim_")]
     assert leftovers == []
 
 
