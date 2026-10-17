@@ -344,3 +344,46 @@ def test_subgraph_queries(tiny_repo: tuple[str, Graph]) -> None:
     assert "nodes" in sub_summary
     assert "edges" in sub_summary
     assert sub_summary["highlight"]["nodes"] == []
+
+
+def test_trace_paths_zero_entrypoints_gives_unknown() -> None:
+    """A graph with zero entrypoints gives verdict 'unknown' with reason 'no_entrypoints_detected'."""
+    repo_id = str(uuid.uuid4())
+    g = repo_graph(repo_id)
+
+    try:
+        g.query("MATCH (n) DETACH DELETE n")
+    except Exception:
+        pass
+
+    ensure_repo_schema(g)
+
+    seed_cypher = """
+    CREATE (m1:Module {id: 'app.service', file: 'app/service.py', lines: 40}),
+           (p1:Package {id: 'crypto@1.0.0', name: 'crypto', version: '1.0.0', direct: true, ecosystem: 'PyPI'}),
+           (v1:Vulnerability {id: 'GHSA-zero-ep', aliases: ['CVE-2023-1111'], summary: 'Zero EP vuln', severity: 'HIGH', fixed_versions: ['1.0.1'], published: '2023-01-01'}),
+           (f1:Finding {id: 'find-zero-ep', status: 'open', first_seen: '2026-10-15T00:00:00Z'})
+
+    CREATE (m1)-[:USES]->(p1),
+           (v1)-[:AFFECTS]->(p1),
+           (f1)-[:ABOUT]->(v1),
+           (f1)-[:ON_PACKAGE]->(p1)
+    """
+    g.query(seed_cypher)
+
+    try:
+        stats = entrypoint_stats(repo_id)
+        assert stats["total"] == 0
+        assert stats["total_public"] == 0
+
+        res = trace_paths(repo_id, "find-zero-ep")
+        assert res["finding_id"] == "find-zero-ep"
+        assert res["verdict"] == "unknown"
+        assert res["reason"] == "no_entrypoints_detected"
+        assert res["paths"] == []
+        assert res["reaching_entrypoints"] == 0
+        assert res["total_public_entrypoints"] == 0
+        assert res["blind_spots"] == []
+    finally:
+        delete_graph_if_exists(repo_graph_name(repo_id))
+

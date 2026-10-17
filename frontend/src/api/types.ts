@@ -99,6 +99,7 @@ export interface RepoStats {
   blind_spots: number;
   lockfile_kind: string;
   transitive_available: boolean;
+  no_entrypoints?: boolean;
 }
 
 export interface Repo {

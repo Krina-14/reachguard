@@ -638,7 +638,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
                       <td className="py-3 px-4">
                         {f.owners && f.owners.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
-                            {f.owners.map((owner) => (
+                            {Array.from(new Set(f.owners)).map((owner) => (
                               <span
                                 key={owner}
                                 className="px-1.5 py-0.5 rounded bg-bg-card border border-border text-[10px] text-gray-300 font-mono"

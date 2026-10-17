@@ -14,6 +14,7 @@ from unittest.mock import patch
 from app.ingest.owners import (
     from_codeowners,
     from_git_authors,
+    parse_git_authors,
     resolve_module_owners,
 )
 
@@ -111,3 +112,93 @@ def test_resolve_module_owners_priority(tmp_path):
         codeowners_fn=mock_codeowners,
     )
     assert res3 == []
+
+
+def test_parse_git_authors_groups_by_email_local_part():
+    """Group authors by lowercase email local part first and keep the longest name."""
+    inline_git_log = """
+Ben-Hur Ott|benhur@work.com
+Ben-Hur Santos Ott|benhur@personal.org
+Ben-Hur|benhur@corp.net
+"""
+    authors = parse_git_authors(inline_git_log)
+    assert authors == ["Ben-Hur Santos Ott"]
+
+
+def test_parse_git_authors_token_subset_drop_middle_tokens():
+    """Drop middle tokens when one name is a token subset of another, keeping the longest."""
+    inline_git_log = """
+Ben-Hur Ott|ott1@domain.com
+Ben-Hur Santos Ott|ott2@different-domain.com
+"""
+    authors = parse_git_authors(inline_git_log)
+    assert authors == ["Ben-Hur Santos Ott"]
+
+
+def test_parse_git_authors_collapses_spaces_and_lowercases():
+    """Whitespace is collapsed and case normalized when matching names."""
+    inline_git_log = """
+Ben-Hur    Ott|first@a.com
+ben-hur   santos   ott|second@b.com
+"""
+    authors = parse_git_authors(inline_git_log)
+    assert len(authors) == 1
+    # Keeps the longest representation
+    assert authors[0].lower().replace(" ", "") == "ben-hursantosott"
+
+
+def test_parse_git_authors_top_three_limit():
+    """Return at most 3 distinct owners ranked by commit frequency."""
+    inline_git_log = """
+Alice Smith|asmith@work.com
+Alice Smith|asmith@work.com
+Alice Smith|asmith@work.com
+Bob Jones|bjones@work.com
+Bob Jones|bjones@work.com
+Charlie Chaplin|cchaplin@work.com
+David Bowie|dbowie@work.com
+Eve Adams|eadams@work.com
+"""
+    authors = parse_git_authors(inline_git_log, n=3)
+    assert len(authors) == 3
+    assert authors == ["Alice Smith", "Bob Jones", "Charlie Chaplin"]
+
+
+def test_parse_git_authors_distinct_persons_do_not_merge():
+    """Authors with different first or last names do not merge."""
+    inline_git_log = """
+Alice Smith|asmith@domain.com
+Bob Smith|bsmith@domain.com
+Alice Jones|ajones@domain.com
+"""
+    authors = parse_git_authors(inline_git_log, n=3)
+    assert len(authors) == 3
+    assert set(authors) == {"Alice Smith", "Bob Smith", "Alice Jones"}
+
+
+@patch("subprocess.run")
+def test_from_git_authors_uses_format_an_ae(mock_subproc, tmp_path):
+    """from_git_authors passes --format=%an|%ae and returns at most 3 distinct owners."""
+    (tmp_path / ".git").mkdir()
+
+    mock_proc = mock_subproc.return_value
+    mock_proc.returncode = 0
+    mock_proc.stdout = """
+Ben-Hur Ott|benhur@work.com
+Ben-Hur Santos Ott|benhur@personal.org
+Alice Smith|alice@work.com
+Alice Smith|alice@work.com
+Charlie|charlie@work.com
+David|david@work.com
+"""
+
+    authors = from_git_authors(tmp_path, "src/core.py")
+    assert mock_subproc.called
+    cmd_called = mock_subproc.call_args[0][0]
+    assert "--format=%an|%ae" in cmd_called
+    assert len(authors) == 3
+    # Top 3: Alice Smith (2 commits), Ben-Hur Santos Ott (2 commits), Charlie (1 commit)
+    assert "Ben-Hur Santos Ott" in authors
+    assert "Alice Smith" in authors
+    assert len(authors) <= 3
+

@@ -4,42 +4,6 @@ import { useAuth } from "../auth/useAuth";
 import { ApiError } from "../api/types";
 import { useDocumentTitle } from "../lib/useDocumentTitle";
 
-interface QuickAccount {
-  role: "admin" | "analyst" | "viewer";
-  label: string;
-  email: string;
-  secret: string;
-  description: string;
-  badgeClass: string;
-}
-
-const QUICK_ACCOUNTS: QuickAccount[] = [
-  {
-    role: "admin",
-    label: "Admin",
-    email: "admin@reachguard.io",
-    secret: "AdminPass!123",
-    description: "Full privileges & user management",
-    badgeClass: "bg-purple-500/20 text-purple-300 border-purple-500/40",
-  },
-  {
-    role: "analyst",
-    label: "Analyst",
-    email: "analyst@reachguard.io",
-    secret: "AnalystPass!123",
-    description: "Analyze repos, investigate & accept risk",
-    badgeClass: "bg-blue-500/20 text-blue-300 border-blue-500/40",
-  },
-  {
-    role: "viewer",
-    label: "Viewer",
-    email: "viewer@reachguard.io",
-    secret: "ViewerPass!123",
-    description: "Read-only findings & call-graphs",
-    badgeClass: "bg-slate-500/20 text-slate-300 border-slate-500/40",
-  },
-];
-
 export const LoginPage: React.FC = () => {
   useDocumentTitle("Sign In");
   const { login, isAuthenticated } = useAuth();
@@ -66,12 +30,13 @@ export const LoginPage: React.FC = () => {
     }
   }, [isAuthenticated, navigate, from]);
 
-  const performLogin = async (loginEmail: string, loginPass: string) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
     setErrorMessage(null);
     setIsSubmitting(true);
 
     try {
-      await login(loginEmail.trim(), loginPass);
+      await login(email.trim(), password);
       navigate(from, { replace: true });
     } catch (err: unknown) {
       if (err instanceof ApiError) {
@@ -81,23 +46,12 @@ export const LoginPage: React.FC = () => {
           setErrorMessage(err.message || "Invalid email or password");
         }
       } else if (err instanceof Error) {
-        setErrorMessage(err.message);
+        setErrorMessage(err.message || "Invalid email or password");
       } else {
-        setErrorMessage("An unexpected authentication error occurred");
+        setErrorMessage("Invalid email or password");
       }
       setIsSubmitting(false);
     }
-  };
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    await performLogin(email, password);
-  };
-
-  const handleQuickLogin = async (acc: QuickAccount) => {
-    setEmail(acc.email);
-    setPassword(acc.secret);
-    await performLogin(acc.email, acc.secret);
   };
 
   return (
@@ -124,47 +78,6 @@ export const LoginPage: React.FC = () => {
           <p className="text-sm text-gray-400 mt-1">
             Vulnerability Reachability & Call-Graph Intelligence
           </p>
-        </div>
-
-        {/* Quick Role Sign-in Card */}
-        <div className="bg-bg-surface border border-accent/30 rounded-xl p-5 mb-5 shadow-xl">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-accent flex items-center gap-1.5">
-              <svg
-                className="w-3.5 h-3.5 text-accent"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-              </svg>
-              Quick Role Sign In
-            </span>
-            <span className="text-[11px] text-gray-400">1-click access</span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2.5">
-            {QUICK_ACCOUNTS.map((acc) => (
-              <button
-                key={acc.role}
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleQuickLogin(acc)}
-                className="flex flex-col items-center text-center p-2.5 rounded-lg bg-bg-card hover:bg-bg-subtle border border-border hover:border-accent/50 transition-all cursor-pointer group disabled:opacity-50"
-                title={`${acc.email} — ${acc.description}`}
-              >
-                <span
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border mb-1.5 ${acc.badgeClass}`}
-                >
-                  {acc.label}
-                </span>
-                <span className="text-[10px] text-gray-400 group-hover:text-white transition-colors truncate w-full">
-                  {acc.email.split("@")[0]}
-                </span>
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Login Card */}
@@ -204,12 +117,12 @@ export const LoginPage: React.FC = () => {
                 name="email"
                 type="email"
                 ref={emailInputRef}
-                autoComplete="email"
+                autoComplete="username"
                 required
                 disabled={isSubmitting}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="analyst@reachguard.io"
+                placeholder="you@company.com"
                 className="w-full px-3.5 py-2.5 bg-bg-card border border-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-all disabled:opacity-50"
               />
             </div>

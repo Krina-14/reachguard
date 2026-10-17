@@ -109,9 +109,10 @@ Finding id = `sha1(vuln_id + "|" + package_id)[:12]`. Entrypoint id = `sha1(meth
 | Verdict string (API) | UI label | Rule |
 |---|---|---|
 | `reachable_in_model` | Reachable in model | at least one path from a **public** entrypoint to the package |
-| `unknown` | Unknown | no path, but a `dynamic_import` or `unparsed_file` blind spot exists in a module reachable from a public entrypoint, or an `unresolved_import` there whose normalized name matches the package name |
+| `unknown` | Unknown | no path, but a `dynamic_import` or `unparsed_file` blind spot exists in a module reachable from a public entrypoint, or an `unresolved_import` there whose normalized name matches the package name; OR `total_public_entrypoints == 0` |
 | `no_path_found` | No path found in model | none of the above. UI must show the search scope and the sentence "This is not proof of safety." |
 
+If `total_public_entrypoints == 0`, the verdict is `unknown` with reason `no_entrypoints_detected`.
 If a package is only in the lockfile and never imported, verdict is `no_path_found` with reason `declared_not_imported`.
 
 ## 6. Score (deterministic, M3 owns `scoring.py`)
@@ -140,12 +141,13 @@ Errors always: `{"error": {"code": "string", "message": "string"}}` with proper 
 ### Admin (admin only)
 - `GET /api/admin/users`, `POST /api/admin/users` `{email,password,role}`, `PATCH /api/admin/users/{id}` `{role?,active?,password?}`
 - Cannot demote or deactivate the last active admin (409).
+- `GET /api/admin/audit?limit=100` (admin only, limit max 500) -> latest AuditEvent rows from the meta graph, newest first `[{id, at, actor, action, target}]`
 
 ### Repos
 - `POST /api/repos` `{git_url}` (analyst+) -> `202 {repo_id, status:"queued"}`. Only `https://github.com/<owner>/<repo>` (optionally `.git`) is accepted in MVP.
 - `POST /api/repos/upload` multipart `file=<zip>` (analyst+) -> `202 {repo_id,status}`
 - `GET /api/repos` -> `[{id, source, status, created_at, stats}]`
-- `GET /api/repos/{id}` -> `{id, source, status, stage_detail, error, created_at, stats:{files_parsed, files_failed, modules, entrypoints, public_entrypoints, packages, direct_packages, findings, blind_spots, lockfile_kind, transitive_available}}`
+- `GET /api/repos/{id}` -> `{id, source, status, stage_detail, error, created_at, stats:{files_parsed, files_failed, modules, entrypoints, public_entrypoints, packages, direct_packages, findings, blind_spots, lockfile_kind, transitive_available, no_entrypoints}}`
   - `status`: `queued|cloning|parsing|scanning|ready|failed`
 - `DELETE /api/repos/{id}` (admin) -> 204 (drops its graph)
 
@@ -163,6 +165,7 @@ Errors always: `{"error": {"code": "string", "message": "string"}}` with proper 
 - `POST /api/repos/{id}/findings/{fid}/decisions` `{type:"accept_risk"|"fix_planned"|"false_positive"|"fixed", reason (min 10 chars), expires_at?}` (analyst+)
 - `POST /api/repos/{id}/decisions/{did}/approve` / `.../reject` (admin)
 - `GET /api/repos/{id}/memory?finding_id=` -> `{investigations:[...], decisions:[...]}` (without finding_id: latest 50)
+- `GET /api/decisions?status=pending` (admin only): for every repo in ready status, return decisions with that status together with repo_id, repo source, and the finding summary `{id, vuln_id, package, version, verdict, score}`. One query per repo graph, parameterized. Cap 200 rows.
 
 ### Agent
 - `POST /api/repos/{id}/agent/chat` `{session_id?, message, save?:false}` ->

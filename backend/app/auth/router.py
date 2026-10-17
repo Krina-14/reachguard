@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,6 +23,7 @@ from app.auth.service import (
     update_user,
 )
 from app.deps import get_current_user, require_role
+from app.graph.client import meta_graph, run
 
 # ── Rate limiter ────────────────────────────────────────────────
 
@@ -180,7 +181,12 @@ async def admin_create_user(
 ) -> dict[str, Any]:
     """Create a new user (admin only)."""
     try:
-        return create_user(body.email, body.password, body.role)
+        return create_user(
+            body.email,
+            body.password,
+            body.role,
+            actor_email=admin.get("email", "admin"),
+        )
     except ValueError as exc:
         if "duplicate_email" in str(exc):
             raise HTTPException(
@@ -235,3 +241,38 @@ async def admin_patch_user(
     # Strip password_hash from response
     updated.pop("password_hash", None)
     return updated
+
+
+@admin_router.get("/audit")
+async def admin_get_audit(
+    limit: int = Query(default=100, ge=1, le=500),
+    _admin: dict[str, Any] = Depends(require_role("admin")),
+) -> list[dict[str, Any]]:
+    """Return latest AuditEvent rows from the meta graph, newest first (admin only).
+
+    Contract: limit default 100, max 500. {id, at, actor, action, target}.
+    """
+    effective_limit = min(max(1, limit), 500)
+    g = meta_graph()
+    cypher = """
+    MATCH (a:AuditEvent)
+    WITH a.id AS id,
+         COALESCE(a.at, a.ts) AS at,
+         COALESCE(a.actor, a.actor_email) AS actor,
+         COALESCE(a.action, a.event) AS action,
+         COALESCE(a.target, a.detail, "") AS target
+    RETURN id, at, actor, action, target
+    ORDER BY at DESC
+    LIMIT $limit
+    """
+    rows = run(g, cypher, params={"limit": effective_limit})
+    return [
+        {
+            "id": r.get("id") or "",
+            "at": r.get("at") or "",
+            "actor": r.get("actor") or "",
+            "action": r.get("action") or "",
+            "target": r.get("target") or "",
+        }
+        for r in rows
+    ]

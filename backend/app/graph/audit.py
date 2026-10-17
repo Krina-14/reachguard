@@ -15,7 +15,7 @@ from app.graph.client import meta_graph, run
 logger = logging.getLogger(__name__)
 
 
-def write_audit_event(actor: str, action: str, target: str) -> None:
+def write_audit_event(actor: str, action: str, target: str = "") -> None:
     """Create an (:AuditEvent) node in the meta graph.
 
     Satisfies Contract Section 4: {id, at, actor, action, target}.
@@ -32,6 +32,7 @@ def write_audit_event(actor: str, action: str, target: str) -> None:
         target: $target,
         event: $action,
         actor_email: $actor,
+        detail: $target,
         ts: $at
     })
     """

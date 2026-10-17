@@ -23,7 +23,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.agent.router import agent_router
 from app.api.findings import findings_router
-from app.api.memory import memory_router
+from app.api.memory import decisions_router, memory_router
 from app.api.whatif import whatif_router
 from app.auth.router import admin_router, auth_router, limiter
 from app.auth.service import bootstrap_admin
@@ -192,4 +192,5 @@ app.include_router(repos_router)
 app.include_router(findings_router)
 app.include_router(whatif_router)
 app.include_router(memory_router)
+app.include_router(decisions_router)
 app.include_router(agent_router)

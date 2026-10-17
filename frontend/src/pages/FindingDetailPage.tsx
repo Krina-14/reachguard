@@ -316,7 +316,7 @@ export const FindingDetailPage: React.FC = () => {
 
               {finding.owners && finding.owners.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
-                  {finding.owners.map((owner) => (
+                  {Array.from(new Set(finding.owners)).map((owner) => (
                     <span
                       key={owner}
                       className="px-2.5 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 inline-flex items-center gap-1.5"
@@ -488,16 +488,26 @@ export const FindingDetailPage: React.FC = () => {
                       <line x1="12" y1="8" x2="12" y2="12" />
                       <line x1="12" y1="16" x2="12.01" y2="16" />
                     </svg>
-                    Analysis Blind Spots
+                    Analysis Scope & Blind Spots
                   </h3>
                   <span className="text-xs text-gray-400">
-                    {finding.trace?.blind_spots?.length || 0} items prevent conclusive reachability
+                    {finding.trace?.reason === "no_entrypoints_detected"
+                      ? "No entrypoints detected"
+                      : `${finding.trace?.blind_spots?.length || 0} items prevent conclusive reachability`}
                   </span>
                 </div>
 
-                <p className="text-xs text-gray-300 leading-relaxed">
-                  The model encountered unparsed files, dynamic imports, or unresolved references in reachable code paths:
-                </p>
+                {finding.trace?.reason === "no_entrypoints_detected" ? (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-lg text-xs text-amber-200/90 leading-relaxed">
+                    <span className="font-semibold text-amber-400">No entrypoints detected: </span>
+                    No public HTTP entrypoints were detected in this repository. ReachGuard marks this finding as{" "}
+                    <span className="font-bold text-amber-300">Unknown</span> because reachability cannot be conclusively established without entrypoints.
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-gray-300 leading-relaxed">
+                      The model encountered unparsed files, dynamic imports, or unresolved references in reachable code paths:
+                    </p>
 
                 {finding.trace?.blind_spots && finding.trace.blind_spots.length > 0 ? (
                   <div className="overflow-x-auto border border-border rounded-lg">
@@ -534,6 +544,8 @@ export const FindingDetailPage: React.FC = () => {
                   <p className="text-xs text-gray-400 italic">
                     No specific blind spots listed in trace data.
                   </p>
+                )}
+                  </>
                 )}
               </div>
             )}

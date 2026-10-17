@@ -527,7 +527,7 @@ export const AdminUsersPage: React.FC = () => {
                     required
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
-                    placeholder="analyst@example.com"
+                    placeholder="you@company.com"
                     className="w-full px-3 py-2 rounded-lg bg-bg-card border border-border text-white placeholder-gray-500 outline-none focus:border-accent"
                   />
                 </div>

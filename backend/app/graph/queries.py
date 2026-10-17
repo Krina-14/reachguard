@@ -26,6 +26,7 @@ from app.graph.client import (
     run,
     sim_graph_name,
 )
+from app.ingest.owners import deduplicate_owners
 
 logger = logging.getLogger(__name__)
 
@@ -169,137 +170,145 @@ def trace_paths(
     )
     total_public_ep = int(total_public_res[0]["total_public"]) if total_public_res else 0
 
-    # 2. Query reaching paths
-    path_cypher = """
-    MATCH p = (e:Entrypoint {public: true})-[:HANDLED_BY|IMPORTS|USES|DEPENDS_ON*1..20]->(pkg:Package {id: $package_id})
-    RETURN p, length(p) as len
-    ORDER BY len ASC
-    LIMIT $max_paths
-    """
-    t0 = time.perf_counter()
-    path_rows = run(g, path_cypher, {"package_id": package_id, "max_paths": max_paths})
-    trace_ms = round((time.perf_counter() - t0) * 1000)
-    logger.info("Trace finding %s completed in %d ms (repo=%s)", finding_id, trace_ms, repo_id)
-
-    paths = []
-    for row in path_rows:
-        path_obj = row["p"]
-        nodes = path_obj.nodes()
-        edges = path_obj.edges()
-
-        first_node = nodes[0]
-        ep_props = first_node.properties
-        ep_id = str(ep_props.get("id", ""))
-        method = ep_props.get("method", "")
-        p_str = ep_props.get("path", "")
-        entrypoint_desc = f"{method} {p_str}".strip()
-
-        path_nodes = []
-        for n in nodes:
-            lbl = n.labels[0] if n.labels else ""
-            n_id = str(n.properties.get("id", ""))
-            if lbl == "Entrypoint":
-                name = f"{n.properties.get('method', '')} {n.properties.get('path', '')}".strip()
-            elif lbl == "Package":
-                name = n.properties.get("name") or n_id
-            elif lbl == "Module":
-                name = n_id
-            else:
-                name = n.properties.get("name") or n_id
-            path_nodes.append({"id": n_id, "label": lbl, "name": name})
-
-        path_edges = []
-        for e in edges:
-            rel = getattr(e, "relation", None) or getattr(e, "type", "")
-            path_edges.append({"id": str(getattr(e, "id", "")), "type": rel})
-
-        paths.append({
-            "entrypoint_id": ep_id,
-            "entrypoint": entrypoint_desc,
-            "nodes": path_nodes,
-            "edges": path_edges,
-        })
-
-    # 3. Distinct reaching public entrypoints
-    reaching_ep_res = run(
-        g,
+    if total_public_ep == 0:
+        verdict = "unknown"
+        reason = "no_entrypoints_detected"
+        paths: list[dict[str, Any]] = []
+        reaching_entrypoints = 0
+        blind_spots: list[dict[str, Any]] = []
+        trace_ms = 0
+    else:
+        # 2. Query reaching paths
+        path_cypher = """
+        MATCH p = (e:Entrypoint {public: true})-[:HANDLED_BY|IMPORTS|USES|DEPENDS_ON*1..20]->(pkg:Package {id: $package_id})
+        RETURN p, length(p) as len
+        ORDER BY len ASC
+        LIMIT $max_paths
         """
-        MATCH (e:Entrypoint {public: true})-[:HANDLED_BY|IMPORTS|USES|DEPENDS_ON*1..20]->(pkg:Package {id: $package_id})
-        RETURN count(DISTINCT e) as reaching_count
-        """,
-        {"package_id": package_id},
-    )
-    reaching_entrypoints = int(reaching_ep_res[0]["reaching_count"]) if reaching_ep_res else 0
+        t0 = time.perf_counter()
+        path_rows = run(g, path_cypher, {"package_id": package_id, "max_paths": max_paths})
+        trace_ms = round((time.perf_counter() - t0) * 1000)
+        logger.info("Trace finding %s completed in %d ms (repo=%s)", finding_id, trace_ms, repo_id)
 
-    # 4. Blind spots touching the reachable region (modules reachable from any public entrypoint)
-    bs_cypher = """
-    MATCH (e:Entrypoint {public: true})-[:HANDLED_BY]->(h:Module)-[:IMPORTS*0..20]->(m:Module)-[:HAS_BLINDSPOT]->(b:BlindSpot)
-    RETURN DISTINCT m.id as module_id,
-                    b.kind as kind,
-                    b.file as file,
-                    b.line as line,
-                    b.reason as reason,
-                    b.name as name
-    """
-    bs_rows = run(g, bs_cypher)
+        paths = []
+        for row in path_rows:
+            path_obj = row["p"]
+            nodes = path_obj.nodes()
+            edges = path_obj.edges()
 
-    blind_spots = []
-    seen_bs = set()
-    for row in bs_rows:
-        bs_key = (row.get("kind"), row.get("file"), row.get("line"))
-        if bs_key not in seen_bs:
-            seen_bs.add(bs_key)
-            blind_spots.append({
-                "kind": row.get("kind"),
-                "file": row.get("file"),
-                "line": row.get("line"),
-                "reason": row.get("reason"),
+            first_node = nodes[0]
+            ep_props = first_node.properties
+            ep_id = str(ep_props.get("id", ""))
+            method = ep_props.get("method", "")
+            p_str = ep_props.get("path", "")
+            entrypoint_desc = f"{method} {p_str}".strip()
+
+            path_nodes = []
+            for n in nodes:
+                lbl = n.labels[0] if n.labels else ""
+                n_id = str(n.properties.get("id", ""))
+                if lbl == "Entrypoint":
+                    name = f"{n.properties.get('method', '')} {n.properties.get('path', '')}".strip()
+                elif lbl == "Package":
+                    name = n.properties.get("name") or n_id
+                elif lbl == "Module":
+                    name = n_id
+                else:
+                    name = n.properties.get("name") or n_id
+                path_nodes.append({"id": n_id, "label": lbl, "name": name})
+
+            path_edges = []
+            for e in edges:
+                rel = getattr(e, "relation", None) or getattr(e, "type", "")
+                path_edges.append({"id": str(getattr(e, "id", "")), "type": rel})
+
+            paths.append({
+                "entrypoint_id": ep_id,
+                "entrypoint": entrypoint_desc,
+                "nodes": path_nodes,
+                "edges": path_edges,
             })
 
-    # 5. Verdict and Reason calculation per Section 5
-    if len(paths) > 0:
-        verdict = "reachable_in_model"
-        reason = f"Reachable from {reaching_entrypoints} public entrypoint(s)"
-    else:
-        # If package is only in lockfile and never imported, verdict is no_path_found with declared_not_imported
-        uses_res = run(
+        # 3. Distinct reaching public entrypoints
+        reaching_ep_res = run(
             g,
-            "MATCH (:Module)-[:USES]->(p:Package {id: $package_id}) RETURN count(*) as c",
+            """
+            MATCH (e:Entrypoint {public: true})-[:HANDLED_BY|IMPORTS|USES|DEPENDS_ON*1..20]->(pkg:Package {id: $package_id})
+            RETURN count(DISTINCT e) as reaching_count
+            """,
             {"package_id": package_id},
         )
-        is_imported = uses_res and uses_res[0]["c"] > 0
+        reaching_entrypoints = int(reaching_ep_res[0]["reaching_count"]) if reaching_ep_res else 0
 
-        if not is_imported:
-            verdict = "no_path_found"
-            reason = "declared_not_imported"
+        # 4. Blind spots touching the reachable region (modules reachable from any public entrypoint)
+        bs_cypher = """
+        MATCH (e:Entrypoint {public: true})-[:HANDLED_BY]->(h:Module)-[:IMPORTS*0..20]->(m:Module)-[:HAS_BLINDSPOT]->(b:BlindSpot)
+        RETURN DISTINCT m.id as module_id,
+                        b.kind as kind,
+                        b.file as file,
+                        b.line as line,
+                        b.reason as reason,
+                        b.name as name
+        """
+        bs_rows = run(g, bs_cypher)
+
+        blind_spots = []
+        seen_bs = set()
+        for row in bs_rows:
+            bs_key = (row.get("kind"), row.get("file"), row.get("line"))
+            if bs_key not in seen_bs:
+                seen_bs.add(bs_key)
+                blind_spots.append({
+                    "kind": row.get("kind"),
+                    "file": row.get("file"),
+                    "line": row.get("line"),
+                    "reason": row.get("reason"),
+                })
+
+        # 5. Verdict and Reason calculation per Section 5
+        if len(paths) > 0:
+            verdict = "reachable_in_model"
+            reason = f"Reachable from {reaching_entrypoints} public entrypoint(s)"
         else:
-            # Package is imported by some module, but no path from public entrypoint.
-            # Check blind spots touching the reachable region
-            dynamic_bs = next(
-                (b for b in bs_rows if b.get("kind") in ("dynamic_import", "unparsed_file")),
-                None,
+            # If package is only in lockfile and never imported, verdict is no_path_found with declared_not_imported
+            uses_res = run(
+                g,
+                "MATCH (:Module)-[:USES]->(p:Package {id: $package_id}) RETURN count(*) as c",
+                {"package_id": package_id},
             )
-            unresolved_match = None
-            for b in bs_rows:
-                if (
-                    b.get("kind") == "unresolved_import"
-                    and b.get("name")
-                    and _normalize_name(b["name"]) == _normalize_name(package_name)
-                ):
-                    unresolved_match = b
-                    break
+            is_imported = uses_res and uses_res[0]["c"] > 0
 
-            if dynamic_bs is not None:
-                verdict = "unknown"
-                k = dynamic_bs.get("kind")
-                m_or_f = dynamic_bs.get("module_id") or dynamic_bs.get("file")
-                reason = f"{k} in {m_or_f}"
-            elif unresolved_match is not None:
-                verdict = "unknown"
-                reason = f"unresolved_import {unresolved_match['name']} matches package {package_name}"
-            else:
+            if not is_imported:
                 verdict = "no_path_found"
-                reason = "No path found from public entrypoints"
+                reason = "declared_not_imported"
+            else:
+                # Package is imported by some module, but no path from public entrypoint.
+                # Check blind spots touching the reachable region
+                dynamic_bs = next(
+                    (b for b in bs_rows if b.get("kind") in ("dynamic_import", "unparsed_file")),
+                    None,
+                )
+                unresolved_match = None
+                for b in bs_rows:
+                    if (
+                        b.get("kind") == "unresolved_import"
+                        and b.get("name")
+                        and _normalize_name(b["name"]) == _normalize_name(package_name)
+                    ):
+                        unresolved_match = b
+                        break
+
+                if dynamic_bs is not None:
+                    verdict = "unknown"
+                    k = dynamic_bs.get("kind")
+                    m_or_f = dynamic_bs.get("module_id") or dynamic_bs.get("file")
+                    reason = f"{k} in {m_or_f}"
+                elif unresolved_match is not None:
+                    verdict = "unknown"
+                    reason = f"unresolved_import {unresolved_match['name']} matches package {package_name}"
+                else:
+                    verdict = "no_path_found"
+                    reason = "No path found from public entrypoints"
 
     # 6. Searched scope
     mod_count_res = run(g, "MATCH (m:Module) RETURN count(m) as mod_count")
@@ -402,7 +411,8 @@ def list_findings(repo_id: str) -> list[dict[str, Any]]:
             """,
             {"pkg_id": pkg_id},
         )
-        owners = [o["name"] for o in owner_rows if o.get("name")]
+        raw_owners = [o["name"] for o in owner_rows if o.get("name")]
+        owners = deduplicate_owners(raw_owners)
 
         results.append({
             "id": fid,
@@ -491,7 +501,8 @@ def get_finding(repo_id: str, finding_id: str) -> dict[str, Any] | None:
         """,
         {"pkg_id": pkg_id},
     )
-    owners = [o["name"] for o in owner_rows if o.get("name")]
+    raw_owners = [o["name"] for o in owner_rows if o.get("name")]
+    owners = deduplicate_owners(raw_owners)
 
     # Investigations
     inv_rows = run(

@@ -194,6 +194,18 @@ def test_role_matrix(ready_repo: tuple[str, str, str]) -> None:
             None,
             {"unauth": 401, "viewer": 403, "analyst": 403, "admin": 200},
         ),
+        (
+            "GET",
+            "/api/decisions?status=pending",
+            None,
+            {"unauth": 401, "viewer": 403, "analyst": 403, "admin": 200},
+        ),
+        (
+            "GET",
+            "/api/admin/audit?limit=100",
+            None,
+            {"unauth": 401, "viewer": 403, "analyst": 403, "admin": 200},
+        ),
     ]
 
     roles = ["unauth", "viewer", "analyst", "admin"]

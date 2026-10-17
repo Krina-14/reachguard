@@ -40,7 +40,13 @@ from app.ingest.lockfiles import (
     parse_requirements,
 )
 from app.ingest.osv import OsvUnavailable, query_vulns
-from app.ingest.owners import from_codeowners, resolve_module_owners
+from app.ingest.owners import (
+    _names_match,
+    _normalize_name_tokens,
+    deduplicate_owners,
+    from_codeowners,
+    resolve_module_owners,
+)
 from app.ingest.parse_python import ModuleInfo, parse_python_file
 
 logger = logging.getLogger(__name__)
@@ -443,6 +449,23 @@ def build_repo_graph(
                     }
                 )
 
+        # Merge author names across modules if one name is a token subset of another (e.g. Ben-Hur Ott -> Ben-Hur Santos Ott)
+        distinct_author_names = list({r["name"] for r in owner_rows if r["kind"] == "author"})
+        if distinct_author_names:
+            canonical_authors = deduplicate_owners(distinct_author_names, max_owners=len(distinct_author_names))
+            author_map = {}
+            for name in distinct_author_names:
+                t = _normalize_name_tokens(name)
+                for canon in canonical_authors:
+                    if _names_match(t, _normalize_name_tokens(canon)):
+                        author_map[name] = canon
+                        break
+            for r in owner_rows:
+                if r["kind"] == "author" and r["name"] in author_map:
+                    canonical = author_map[r["name"]]
+                    r["name"] = canonical
+                    r["owner_id"] = _make_id("author", canonical)
+
         _batch_unwind(
             g,
             """
@@ -473,6 +496,7 @@ def build_repo_graph(
             "blind_spots": len(blind_spot_rows),
             "lockfile_kind": lockfile_kind,
             "transitive_available": lock_res.transitive_available,
+            "no_entrypoints": total_entrypoints == 0,
         }
 
         notify("ready", None)

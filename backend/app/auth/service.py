@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from app.config import settings
+from app.graph.audit import write_audit_event
 from app.graph.client import meta_graph, run
 
 from .security import hash_password, validate_password_creation, verify_password
@@ -23,19 +24,8 @@ _AUDIT_EVENTS = ("login_success", "login_failure", "user_create", "user_change")
 
 
 def _write_audit(event: str, actor_email: str, detail: str = "") -> None:
-    """Create an (:AuditEvent) node linked to the acting user (if found)."""
-    g = meta_graph()
-    aid = uuid.uuid4().hex
-    now = _dt.datetime.now(_dt.UTC).isoformat()
-    try:
-        g.query(
-            "CREATE (:AuditEvent {id: $aid, event: $event, actor_email: $email, "
-            "detail: $detail, ts: $ts})",
-            params={"aid": aid, "event": event, "email": actor_email,
-                    "detail": detail, "ts": now},
-        )
-    except Exception:
-        logger.warning("Failed to write audit event %s", event, exc_info=True)
+    """Create an (:AuditEvent) node in rg_meta with {id, at, actor, action, target}."""
+    write_audit_event(actor=actor_email, action=event, target=detail)
 
 
 # ── User helpers ────────────────────────────────────────────────
@@ -76,7 +66,13 @@ def list_users() -> list[dict[str, Any]]:
     )
 
 
-def create_user(email: str, password: str, role: str) -> dict[str, Any]:
+def create_user(
+    email: str,
+    password: str,
+    role: str,
+    *,
+    actor_email: str | None = None,
+) -> dict[str, Any]:
     """Create a new user. Raises ValueError on duplicate email."""
     email_lower = email.lower().strip()
     validate_password_creation(password)
@@ -101,7 +97,8 @@ def create_user(email: str, password: str, role: str) -> dict[str, Any]:
         },
     )
 
-    _write_audit("user_create", email_lower, f"role={role}")
+    actor = actor_email or email_lower
+    _write_audit("user_create", actor, f"target={email_lower} role={role}")
     return {
         "id": user_id,
         "email": email_lower,
@@ -118,12 +115,12 @@ def authenticate(email: str, password: str) -> dict[str, Any] | None:
     """
     user = get_user_by_email(email)
     if not user or not verify_password(password, user["password_hash"]):
-        _write_audit("login_failure", email.lower())
+        _write_audit("login_failure", email.lower(), "invalid credentials")
         return None
     if not user.get("active", True):
         _write_audit("login_failure", email.lower(), "account deactivated")
         return None
-    _write_audit("login_success", user["email"])
+    _write_audit("login_success", user["email"], "auth/login")
     return user
 
 
