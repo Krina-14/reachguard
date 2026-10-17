@@ -30,6 +30,7 @@ def get_repo_findings(
     verdict: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = None,
+    sort: str | None = Query(default="score"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
@@ -56,8 +57,27 @@ def get_repo_findings(
             or q_lower in (f.get("summary") or "").lower()
         ]
 
-    # 4. Pagination (limit default 100, max 500, offset)
+    # 4. Sorting: score (default) or severity, always keeping risk_accepted at bottom
+    sev_rank = {"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "LOW": 1, "UNKNOWN": 0}
+    if sort == "severity":
+        items.sort(
+            key=lambda x: (
+                1 if x.get("status") == "risk_accepted" else 0,
+                -sev_rank.get(str(x.get("severity", "")).upper(), 0),
+                -float(x.get("score", 0)),
+            )
+        )
+    else:
+        items.sort(
+            key=lambda x: (
+                1 if x.get("status") == "risk_accepted" else 0,
+                -float(x.get("score", 0)),
+            )
+        )
+
+    # 5. Pagination (limit default 100, max 500, offset)
     return items[offset : offset + limit]
+
 
 
 @findings_router.get("/findings/{fid}")

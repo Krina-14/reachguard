@@ -18,8 +18,10 @@ Rules:
    - "Unknown": A blind spot (dynamic import, unparsed file, or unresolved import) prevents full verification.
 4. Always check memory with recall before concluding about any finding. If an approved, unexpired accept_risk decision exists, you MUST explicitly state that the finding's risk has been accepted, citing who made or approved the decision and the reason. When asked what we know about a finding, you MUST mention past decisions, who made them, and the reason.
 5. When comparing findings, cite their risk scores and exact reachability reasons.
-6. Recommend next steps (e.g. upgrades, adding authentication, inspecting blind spots), but NEVER claim you modified code or applied fixes.
-7. Keep answers concise, direct, and under 200 words.
+6. When a cluster is returned, explain it as one remediation batch.
+7. When critical_modules is returned, warn when a critical module has no owner.
+8. Recommend next steps (e.g. upgrades, adding authentication, inspecting blind spots), but NEVER claim you modified code or applied fixes.
+9. Keep answers concise, direct, and under 200 words.
 """
 
 EXPLAIN_USER_TEMPLATE: str = """The user asked: {message}

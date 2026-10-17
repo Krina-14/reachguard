@@ -8,8 +8,11 @@ import { LoginPage } from "./pages/LoginPage";
 import { ReposPage } from "./pages/ReposPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
+import { RepoMemoryPage } from "./pages/RepoMemoryPage";
 import { AdminUsersPage } from "./pages/AdminUsersPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,44 +25,48 @@ const queryClient = new QueryClient({
 
 export const App: React.FC = () => {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            {/* Public authentication route */}
-            <Route path="/login" element={<LoginPage />} />
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              {/* Public authentication route */}
+              <Route path="/login" element={<LoginPage />} />
 
-            {/* Protected routes wrapped in Layout and RequireAuth */}
-            <Route
-              element={
-                <RequireAuth>
-                  <Layout />
-                </RequireAuth>
-              }
-            >
-              <Route path="/" element={<ReposPage />} />
-              <Route path="/repos/:repoId" element={<RepoDetailPage />} />
+              {/* Protected routes wrapped in Layout and RequireAuth */}
               <Route
-                path="/repos/:repoId/findings/:findingId"
-                element={<FindingDetailPage />}
-              />
-              <Route
-                path="/admin/users"
                 element={
-                  <RequireRole roles={["admin"]}>
-                    <AdminUsersPage />
-                  </RequireRole>
+                  <RequireAuth>
+                    <Layout />
+                  </RequireAuth>
                 }
-              />
-            </Route>
+              >
+                <Route path="/" element={<ReposPage />} />
+                <Route path="/repos/:repoId" element={<RepoDetailPage />} />
+                <Route path="/repos/:repoId/memory" element={<RepoMemoryPage />} />
+                <Route
+                  path="/repos/:repoId/findings/:findingId"
+                  element={<FindingDetailPage />}
+                />
+                <Route
+                  path="/admin/users"
+                  element={
+                    <RequireRole roles={["admin"]}>
+                      <AdminUsersPage />
+                    </RequireRole>
+                  }
+                />
+              </Route>
 
-            {/* Catch-all route */}
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </QueryClientProvider>
+              {/* Catch-all route */}
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 };
+
 
 export default App;

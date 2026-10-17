@@ -287,9 +287,9 @@ def list_repos(
         results.append(
             {
                 "id": r["id"],
-                "source": r["source"],
-                "status": r["status"],
-                "created_at": r.get("created_at"),
+                "source": r.get("source") or "unknown",
+                "status": r.get("status") or "queued",
+                "created_at": r.get("created_at") or datetime.now(UTC).isoformat(),
                 "stats": stats_obj,
             }
         )
@@ -326,13 +326,14 @@ def get_repo(
 
     return {
         "id": r["id"],
-        "source": r["source"],
-        "status": r["status"],
+        "source": r.get("source") or "unknown",
+        "status": r.get("status") or "queued",
         "stage_detail": r.get("stage_detail"),
         "error": r.get("error"),
-        "created_at": r.get("created_at"),
+        "created_at": r.get("created_at") or datetime.now(UTC).isoformat(),
         "stats": stats_obj,
     }
+
 
 
 @repos_router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)

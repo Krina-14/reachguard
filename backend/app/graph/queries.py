@@ -376,15 +376,17 @@ def list_findings(repo_id: str) -> list[dict[str, Any]]:
             g,
             """
             MATCH (f:Finding {id: $fid})-[:HAS_DECISION]->(d:Decision {type: "accept_risk", status: "approved"})
-            RETURN d.expires_at as expires_at
+            RETURN d.expires_at as expires_at, d.by as by, d.approved_by as approved_by
             """,
             {"fid": fid},
         )
         is_risk_accepted = False
+        risk_accepted_by = None
         for dec in dec_rows:
             exp = dec.get("expires_at")
             if not exp or exp > now_iso:
                 is_risk_accepted = True
+                risk_accepted_by = dec.get("approved_by") or dec.get("by")
                 break
 
         finding_status = "risk_accepted" if is_risk_accepted else (r["status"] or "open")
@@ -414,7 +416,9 @@ def list_findings(repo_id: str) -> list[dict[str, Any]]:
             "score": score,
             "status": finding_status,
             "owners": owners,
+            "risk_accepted_by": risk_accepted_by,
         })
+
 
     # Sort: score desc, risk_accepted last
     results.sort(
@@ -575,16 +579,12 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
                 """
                 MATCH (n) WHERE n.id IN $ids
                 OPTIONAL MATCH (n)-[r]-(neighbor)
-                RETURN n, r, neighbor
+                RETURN n, neighbor
                 """,
                 {"ids": list(path_node_ids)},
             )
             for row in neighbor_rows:
-                n_obj = row.get("n")
-                r_obj = row.get("r")
-                neighbor_obj = row.get("neighbor")
-
-                for obj in (n_obj, neighbor_obj):
+                for obj in (row.get("n"), row.get("neighbor")):
                     if obj is not None:
                         obj_id = str(obj.properties.get("id", ""))
                         if obj_id and obj_id not in nodes_dict and len(nodes_dict) < 80:
@@ -601,17 +601,25 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
                                 "props": obj.properties,
                             }
 
-                if r_obj is not None:
-                    src_id = str(r_obj.src_node)
-                    dst_id = str(r_obj.dest_node)
-                    rel = getattr(r_obj, "relation", None) or getattr(r_obj, "type", "")
-                    r_id = str(getattr(r_obj, "id", ""))
-                    edges_list.append({
-                        "id": r_id,
-                        "source": src_id,
-                        "target": dst_id,
-                        "type": rel,
-                    })
+            node_id_list = list(nodes_dict.keys())
+            edge_rows = run(
+                g,
+                """
+                MATCH (a)-[r]->(b)
+                WHERE a.id IN $ids AND b.id IN $ids
+                RETURN a.id as src, b.id as dst, r
+                """,
+                {"ids": node_id_list},
+            )
+            edges_list = [
+                {
+                    "id": str(getattr(er["r"], "id", "")),
+                    "source": er["src"],
+                    "target": er["dst"],
+                    "type": getattr(er["r"], "relation", None) or getattr(er["r"], "type", ""),
+                }
+                for er in edge_rows
+            ]
         else:
             direct_rows = run(
                 g,
@@ -619,7 +627,7 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
                 MATCH (f:Finding {id: $fid})-[:ON_PACKAGE]->(p:Package)
                 OPTIONAL MATCH (f)-[:ABOUT]->(v:Vulnerability)
                 OPTIONAL MATCH (p)-[r]-(neighbor)
-                RETURN f, p, v, r, neighbor
+                RETURN f, p, v, neighbor
                 """,
                 {"fid": finding_id},
             )
@@ -637,14 +645,25 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
                                 "name": name,
                                 "props": obj.properties,
                             }
-                r_obj = row.get("r")
-                if r_obj is not None:
-                    edges_list.append({
-                        "id": str(getattr(r_obj, "id", "")),
-                        "source": str(r_obj.src_node),
-                        "target": str(r_obj.dest_node),
-                        "type": getattr(r_obj, "relation", None) or getattr(r_obj, "type", ""),
-                    })
+            node_id_list = list(nodes_dict.keys())
+            edge_rows = run(
+                g,
+                """
+                MATCH (a)-[r]->(b)
+                WHERE a.id IN $ids AND b.id IN $ids
+                RETURN a.id as src, b.id as dst, r
+                """,
+                {"ids": node_id_list},
+            )
+            edges_list = [
+                {
+                    "id": str(getattr(er["r"], "id", "")),
+                    "source": er["src"],
+                    "target": er["dst"],
+                    "type": getattr(er["r"], "relation", None) or getattr(er["r"], "type", ""),
+                }
+                for er in edge_rows
+            ]
 
         return {
             "nodes": list(nodes_dict.values()),
@@ -739,8 +758,21 @@ def critical_modules(
             max_score = max(r["score"] for r in rows)
             results = []
             for r in rows:
+                mid = r["module"]
                 norm_score = round((r["score"] / max_score) * 100.0, 2) if max_score > 0 else 0.0
-                results.append({"module": r["module"], "score": norm_score})
+                owner_rows = run(
+                    g,
+                    "MATCH (m:Module {id: $mid})-[:OWNED_BY]->(o:Owner) RETURN o.name as name",
+                    {"mid": mid},
+                )
+                owners = [o["name"] for o in owner_rows if o.get("name")]
+                owner_str = f"Owner: {', '.join(owners)}" if owners else "No owner assigned"
+                results.append({
+                    "module": mid,
+                    "score": norm_score,
+                    "note": f"Algorithm: PageRank on IMPORTS edges. {owner_str}.",
+                    "owners": owners,
+                })
             return results
     except Exception as exc:  # noqa: BLE001
         logger.warning("algo.pageRank failed, using reach_centrality fallback: %s", exc)
@@ -759,18 +791,45 @@ def critical_modules(
 
     if not mod_count:
         all_mods = run(g, "MATCH (m:Module) RETURN m.id as mid LIMIT 10")
-        return [{"module": m["mid"], "reach_centrality": 0, "score": 0.0} for m in all_mods]
+        results = []
+        for m in all_mods:
+            mid = m["mid"]
+            owner_rows = run(
+                g,
+                "MATCH (m:Module {id: $mid})-[:OWNED_BY]->(o:Owner) RETURN o.name as name",
+                {"mid": mid},
+            )
+            owners = [o["name"] for o in owner_rows if o.get("name")]
+            owner_str = f"Owner: {', '.join(owners)}" if owners else "No owner assigned"
+            results.append({
+                "module": mid,
+                "reach_centrality": 0,
+                "score": 0.0,
+                "note": f"Algorithm: reach_centrality fallback (0 paths). {owner_str}.",
+                "owners": owners,
+            })
+        return results
 
     max_c = max(mod_count.values())
     sorted_mods = sorted(mod_count.items(), key=lambda x: -x[1])[:10]
-    return [
-        {
+    results = []
+    for mid, count in sorted_mods:
+        score = round((count / max_c) * 100.0, 2) if max_c > 0 else 0.0
+        owner_rows = run(
+            g,
+            "MATCH (m:Module {id: $mid})-[:OWNED_BY]->(o:Owner) RETURN o.name as name",
+            {"mid": mid},
+        )
+        owners = [o["name"] for o in owner_rows if o.get("name")]
+        owner_str = f"Owner: {', '.join(owners)}" if owners else "No owner assigned"
+        results.append({
             "module": mid,
             "reach_centrality": count,
-            "score": round((count / max_c) * 100.0, 2) if max_c > 0 else 0.0,
-        }
-        for mid, count in sorted_mods
-    ]
+            "score": score,
+            "note": f"Algorithm: reach_centrality fallback ({count} reachable entrypoint paths). {owner_str}.",
+            "owners": owners,
+        })
+    return results
 
 
 # ── Choke points (Contract Section 7) ──────────────────────────

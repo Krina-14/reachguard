@@ -77,6 +77,12 @@ def _format_tool_summary(name: str, args: dict[str, Any], res: dict[str, Any]) -
         fid = args.get("finding_id", "")
         inv_id = res.get("investigation_id", "")
         return f"save_investigation({fid}): saved {inv_id}"
+    if name == "critical_modules":
+        cnt = res.get("count", len(res.get("modules", [])))
+        return f"critical_modules(): {cnt} modules"
+    if name == "vulnerability_clusters":
+        cnt = res.get("count", len(res.get("clusters", [])))
+        return f"vulnerability_clusters(): {cnt} clusters"
     return f"{name}(): ok={res.get('ok', True)}"
 
 
@@ -90,6 +96,10 @@ def _update_evidence(evidence: dict[str, Any], name: str, res: dict[str, Any]) -
         evidence["traces"].append(res)
     elif name == "recall":
         evidence["memory"].append(res)
+    elif name == "critical_modules":
+        evidence.setdefault("modules", []).extend(res.get("modules", []))
+    elif name == "vulnerability_clusters":
+        evidence.setdefault("clusters", []).extend(res.get("clusters", []))
 
 
 def run_agent(

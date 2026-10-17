@@ -288,3 +288,95 @@ def test_rate_limit_20_per_minute(ready_repo: str) -> None:
             headers=headers,
         )
         assert res21.status_code == 429
+
+
+# ── Verify F7: Fix first query, deterministic mode, viewer save ────────
+
+
+def test_verify_f7_fix_first_deterministic_and_viewer_save(ready_repo: str) -> None:
+    """Verify F7:
+
+    - Ask "Which finding should I fix first and why?". The answer appears with tool calls under Evidence.
+    - Stop Ollama: the next answer shows the "Deterministic" chip (mode='deterministic').
+    - As viewer the Save toggle is rejected with 403 (hidden on frontend).
+    """
+    analyst_h = _auth_headers(role="analyst")
+    viewer_h = _auth_headers(role="viewer")
+
+    # 1. Ask "Which finding should I fix first and why?" with active LLM tools
+    mock_llm_result = AgentResult(
+        answer="You should fix finding 112233445566 first because it has a confirmed path from public entrypoint POST /login and high risk score 85.",
+        mode="llm_tools",
+        tool_calls=[
+            {"name": "list_findings", "args": {}, "ok": True, "summary": "Found 1 finding"},
+            {"name": "choke_points", "args": {}, "ok": True, "summary": "Top choke point is pkg1"},
+            {"name": "trace_path", "args": {"finding_id": "112233445566"}, "ok": True, "summary": "1 reaching path"},
+        ],
+        evidence={
+            "findings": [{"id": "112233445566", "package": "pkg1", "score": 85, "verdict": "reachable_in_model"}],
+            "traces": [{"finding_id": "112233445566", "verdict": "reachable_in_model", "paths": [{}]}],
+            "memory": [],
+        },
+        grounded=True,
+        warnings=[],
+    )
+
+    with patch("app.agent.router.run_agent", return_value=mock_llm_result):
+        resp_llm = client.post(
+            f"/api/repos/{ready_repo}/agent/chat",
+            json={"message": "Which finding should I fix first and why?"},
+            headers=analyst_h,
+        )
+        assert resp_llm.status_code == 200
+        data_llm = resp_llm.json()
+        assert data_llm["mode"] == "llm_tools"
+        assert len(data_llm["tool_calls"]) == 3
+        tool_names = [tc["name"] for tc in data_llm["tool_calls"]]
+        assert "list_findings" in tool_names
+        assert "choke_points" in tool_names
+        assert len(data_llm["evidence"]["traces"]) >= 1
+
+    # 2. Stop Ollama: LLM is unreachable -> next answer returns mode "deterministic"
+    mock_deterministic_result = AgentResult(
+        answer="Deterministic assessment: Finding 112233445566 on pkg1 has confirmed reachability.",
+        mode="deterministic",
+        tool_calls=[
+            {"name": "list_findings", "args": {}, "ok": True, "summary": "Found 1 finding"},
+            {"name": "choke_points", "args": {}, "ok": True, "summary": "pkg1 is choke point"},
+        ],
+        evidence={
+            "findings": [{"id": "112233445566", "package": "pkg1", "score": 85}],
+            "traces": [],
+            "memory": [],
+        },
+        grounded=True,
+        warnings=[],
+    )
+
+    with patch("app.agent.router.run_agent", return_value=mock_deterministic_result):
+        resp_det = client.post(
+            f"/api/repos/{ready_repo}/agent/chat",
+            json={"message": "Which finding should I fix first and why?"},
+            headers=analyst_h,
+        )
+        assert resp_det.status_code == 200
+        data_det = resp_det.json()
+        assert data_det["mode"] == "deterministic"
+        assert len(data_det["tool_calls"]) >= 1
+
+    # 3. As viewer: save=true returns 403 Forbidden (UI hides the toggle for viewers)
+    resp_viewer_save = client.post(
+        f"/api/repos/{ready_repo}/agent/chat",
+        json={"message": "Which finding should I fix first and why?", "save": True},
+        headers=viewer_h,
+    )
+    assert resp_viewer_save.status_code == 403
+    assert "analysts and admins" in resp_viewer_save.json()["error"]["message"].lower()
+
+    # 4. As viewer without save: 200 OK
+    resp_viewer_ok = client.post(
+        f"/api/repos/{ready_repo}/agent/chat",
+        json={"message": "Which finding should I fix first and why?", "save": False},
+        headers=viewer_h,
+    )
+    assert resp_viewer_ok.status_code == 200

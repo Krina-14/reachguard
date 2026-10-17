@@ -1,15 +1,36 @@
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../auth/useAuth";
 import { useCan } from "../auth/useCan";
 import { apiFetch } from "../api/client";
+import { ChangePasswordModal } from "./ChangePasswordModal";
 import type { HealthResponse } from "../api/types";
 
 export const Header: React.FC = () => {
   const { user, logout } = useAuth();
   const { canManageUsers } = useCan();
   const navigate = useNavigate();
+
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close user menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   // Poll GET /api/health every 30 seconds
   const { data: health, isError } = useQuery<HealthResponse>({
@@ -137,49 +158,108 @@ export const Header: React.FC = () => {
           </Link>
         )}
 
-        {/* User Identity & Role Badge */}
+        {/* User Identity & Dropdown Menu */}
         {user && (
-          <div className="flex items-center gap-2.5 pl-2 border-l border-border">
-            <div className="flex flex-col items-end">
-              <span className="text-xs font-medium text-gray-200">
-                {user.email}
-              </span>
-              <span
-                className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.2 rounded ${
-                  user.role === "admin"
-                    ? "bg-purple-500/15 text-purple-400 border border-purple-500/30"
-                    : user.role === "analyst"
-                    ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
-                    : "bg-slate-500/15 text-slate-400 border border-slate-500/30"
-                }`}
-              >
-                {user.role}
-              </span>
-            </div>
-
+          <div ref={userMenuRef} className="relative pl-2 border-l border-border">
             <button
-              onClick={handleLogout}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-bg-subtle transition-colors"
-              title="Sign Out"
-              aria-label="Sign Out"
+              type="button"
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className="flex items-center gap-2.5 p-1 rounded-lg hover:bg-bg-card transition-colors select-none text-left"
+              title="User menu"
             >
+              <div className="flex flex-col items-end">
+                <span className="text-xs font-medium text-gray-200">
+                  {user.email}
+                </span>
+                <span
+                  className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.2 rounded ${
+                    user.role === "admin"
+                      ? "bg-purple-500/15 text-purple-400 border border-purple-500/30"
+                      : user.role === "analyst"
+                      ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
+                      : "bg-slate-500/15 text-slate-400 border border-slate-500/30"
+                  }`}
+                >
+                  {user.role}
+                </span>
+              </div>
               <svg
-                className="w-4 h-4"
+                className={`w-3.5 h-3.5 text-gray-400 transition-transform ${
+                  isUserMenuOpen ? "rotate-180" : ""
+                }`}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
               >
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <polyline points="16 17 21 12 16 7" />
-                <line x1="21" y1="12" x2="9" y2="12" />
+                <polyline points="6 9 12 15 18 9" />
               </svg>
             </button>
+
+            {/* Dropdown Menu */}
+            {isUserMenuOpen && (
+              <div className="absolute right-0 mt-2 w-56 rounded-xl bg-bg-surface border border-border shadow-2xl p-1.5 z-50 text-xs space-y-1 animate-fade-in">
+                <div className="px-3 py-2 border-b border-border/70">
+                  <span className="text-[10px] uppercase font-mono text-gray-400 block">
+                    Signed in as
+                  </span>
+                  <span className="font-semibold text-white truncate block">
+                    {user.email}
+                  </span>
+                  <span className="text-[10px] text-gray-400 capitalize">
+                    Role: {user.role}
+                  </span>
+                </div>
+
+                {/* Change Password Option */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    setIsChangePasswordOpen(true);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-gray-300 hover:text-white hover:bg-bg-card transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                  <span>Change Password</span>
+                </button>
+
+                {/* Sign Out Option */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors flex items-center gap-2"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Change Password Dialog */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
     </header>
   );
 };

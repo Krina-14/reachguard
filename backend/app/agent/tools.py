@@ -348,6 +348,60 @@ def save_investigation(
         return {"ok": False, "error": str(exc)}
 
 
+# ── 8. critical_modules ────────────────────────────────────────
+def critical_modules(ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+    """Return top 10 critical modules scored 0-100 from queries.critical_modules.
+
+    Each item has: {module, score, note}.
+    Answers 'which modules are most central/critical'.
+    """
+    try:
+        raw_modules = queries.critical_modules(ctx.repo_id)
+        top_10 = []
+        for m in raw_modules[:10]:
+            score_val = m.get("score", 0.0)
+            note = m.get("note") or f"Centrality score: {score_val}"
+            top_10.append({
+                "module": m.get("module"),
+                "score": score_val,
+                "note": note,
+            })
+        return {
+            "ok": True,
+            "modules": top_10,
+            "count": len(top_10),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Error in critical_modules: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+# ── 9. vulnerability_clusters ──────────────────────────────────
+def vulnerability_clusters(ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+    """Return vulnerability clusters from queries.vulnerability_clusters.
+
+    Each item has: {cluster_id, modules, findings}.
+    Answers 'can these findings be fixed together / which findings are related'.
+    """
+    try:
+        raw_clusters = queries.vulnerability_clusters(ctx.repo_id)
+        clusters = []
+        for c in raw_clusters:
+            clusters.append({
+                "cluster_id": c.get("cluster_id"),
+                "modules": c.get("modules", []),
+                "findings": c.get("findings", []),
+            })
+        return {
+            "ok": True,
+            "clusters": clusters,
+            "count": len(clusters),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Error in vulnerability_clusters: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 # ── Registry & Tool Schemas ─────────────────────────────────────
 REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "list_findings": list_findings,
@@ -357,6 +411,8 @@ REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "simulate": simulate,
     "recall": recall,
     "save_investigation": save_investigation,
+    "critical_modules": critical_modules,
+    "vulnerability_clusters": vulnerability_clusters,
 }
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -525,6 +581,36 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["finding_id", "summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "critical_modules",
+            "description": (
+                "Identify top 10 central or critical modules in the codebase, their centrality scores (0-100), and algorithm notes. "
+                "Answers 'which modules are most central/critical' or questions about module importance and bus factor."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vulnerability_clusters",
+            "description": (
+                "Group findings into clusters based on shared module entrypoints and code paths. "
+                "Answers 'can these findings be fixed together / which findings are related' to plan batched remediations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         },
     },

@@ -67,14 +67,16 @@ def _get_surrounding_sentence(text: str, start: int, end: int, window: int = 150
 def _collect_ground_truth(
     evidence: dict[str, Any] | None,
     tool_results: list[dict[str, Any]] | None,
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Gather all ground-truth findings, scores, verdicts, and packages from evidence and tool outputs.
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], set[str], set[str]]:
+    """Gather all ground-truth findings, scores, verdicts, packages, modules, and clusters from evidence and tool outputs.
 
     Returns:
-        (known_findings, known_packages)
+        (known_findings, known_packages, known_modules, known_clusters)
     """
     known_findings: dict[str, dict[str, Any]] = {}
     known_packages: dict[str, str] = {}
+    known_modules: set[str] = set()
+    known_clusters: set[str] = set()
 
     def ingest_finding_dict(d: dict[str, Any]) -> None:
         candidate_ids = []
@@ -117,6 +119,48 @@ def _collect_ground_truth(
 
     def recurse_ingest(item: Any) -> None:
         if isinstance(item, dict):
+            # Clusters
+            if "cluster_id" in item and item["cluster_id"]:
+                cid_str = str(item["cluster_id"]).lower()
+                known_clusters.add(cid_str)
+                known_clusters.add(cid_str.replace("-", "_"))
+
+            if "clusters" in item and isinstance(item["clusters"], list):
+                for c in item["clusters"]:
+                    if isinstance(c, dict):
+                        if c.get("cluster_id"):
+                            c_id = str(c["cluster_id"]).lower()
+                            known_clusters.add(c_id)
+                            known_clusters.add(c_id.replace("-", "_"))
+                        if "modules" in c and isinstance(c["modules"], list):
+                            for m in c["modules"]:
+                                if m and isinstance(m, str):
+                                    known_modules.add(m.lower())
+
+            # Modules
+            if "modules" in item and isinstance(item["modules"], list):
+                for m in item["modules"]:
+                    if isinstance(m, dict) and m.get("module"):
+                        known_modules.add(str(m["module"]).lower())
+                    elif isinstance(m, str):
+                        known_modules.add(m.lower())
+
+            if "module" in item and item["module"] and isinstance(item["module"], str):
+                known_modules.add(item["module"].lower())
+
+            if "module_id" in item and item["module_id"] and isinstance(item["module_id"], str):
+                known_modules.add(item["module_id"].lower())
+
+            # Path nodes in traces
+            if "nodes" in item and isinstance(item["nodes"], list):
+                for n in item["nodes"]:
+                    if isinstance(n, dict):
+                        if n.get("label") == "Module":
+                            if n.get("id"):
+                                known_modules.add(str(n["id"]).lower())
+                            if n.get("name"):
+                                known_modules.add(str(n["name"]).lower())
+
             # Check if this dict itself is a finding, trace, decision, or investigation
             if "id" in item or "finding_id" in item:
                 ingest_finding_dict(item)
@@ -158,7 +202,99 @@ def _collect_ground_truth(
     if tool_results:
         recurse_ingest(tool_results)
 
-    return known_findings, known_packages
+    return known_findings, known_packages, known_modules, known_clusters
+
+
+MODULE_STOPWORDS = {
+    "this", "that", "these", "those", "the", "a", "an", "is", "are", "was", "were",
+    "each", "every", "all", "both", "either", "neither", "one", "two", "three", "ten",
+    "critical", "central", "important", "python", "in", "to", "of", "and", "or",
+    "for", "with", "no", "none", "by", "from", "on", "as", "at", "not", "be",
+    "has", "have", "had", "can", "could", "should", "would", "which", "what",
+    "where", "when", "who", "why", "how", "top", "such", "other", "some", "many",
+    "several", "first", "last", "any", "same", "different", "new", "old", "s",
+    "their", "there", "here", "its", "it", "they", "them", "we", "us", "you",
+    "score", "scores", "path", "paths", "finding", "findings", "repo", "repository",
+    "algorithm", "fallback", "pagerank", "centrality", "reach_centrality", "owner", "owners",
+    "listed", "below", "following", "above", "highest", "lowest", "most", "least",
+}
+
+CLUSTER_ID_PATTERN = re.compile(r"\bcluster[_\-](\d+|[a-zA-Z0-9]+)\b", re.IGNORECASE)
+
+
+def extract_mentioned_clusters(text: str) -> list[str]:
+    """Extract cluster identifiers like cluster_1, cluster-2 from text."""
+    seen = set()
+    results = []
+    for m in CLUSTER_ID_PATTERN.finditer(text):
+        cid = m.group(0).lower().replace("-", "_")
+        if cid not in seen:
+            seen.add(cid)
+            results.append(cid)
+    return results
+
+
+def extract_mentioned_modules(text: str) -> list[str]:
+    """Extract module names mentioned in text."""
+    candidates: list[str] = []
+
+    # 1. Matches: "module <name>", "module: <name>", "module '<name>'", etc.
+    module_prefix_re = re.compile(
+        r"\bmodule\s*[:=]?\s*[`'\"]?([a-zA-Z_][a-zA-Z0-9_\.\-]*)[`'\"]?",
+        re.IGNORECASE,
+    )
+    for m in module_prefix_re.finditer(text):
+        cand = m.group(1).strip("`'\".,;:()")
+        if cand and cand.lower() not in MODULE_STOPWORDS:
+            candidates.append(cand)
+
+    # 2. Matches: "<name> module" e.g. "made_up_module module", "app.views module"
+    suffix_re = re.compile(
+        r"[`'\"]?([a-zA-Z_][a-zA-Z0-9_\.\-]+)[`'\"]?\s+modules?\b",
+        re.IGNORECASE,
+    )
+    for m in suffix_re.finditer(text):
+        cand = m.group(1).strip("`'\".,;:()")
+        if cand and cand.lower() not in MODULE_STOPWORDS:
+            candidates.append(cand)
+
+    # 3. Matches in bullet lists or comma lists under "Critical modules:" or "Modules:"
+    list_header_re = re.compile(
+        r"(?:critical\s+modules?|central\s+modules?|modules?)\s*[:=]\s*([^\n\.]+)",
+        re.IGNORECASE,
+    )
+    for m in list_header_re.finditer(text):
+        items = re.split(r"[,;]|\band\b", m.group(1))
+        for item in items:
+            cand = item.strip(" `'\":-*()\n\t")
+            first_tok = cand.split()[0] if cand.split() else ""
+            clean_tok = first_tok.strip("`'\".,;:()")
+            if clean_tok and clean_tok.lower() not in MODULE_STOPWORDS:
+                candidates.append(clean_tok)
+
+    # 4. Dotted module paths: e.g. "app.views", "good.vulpy"
+    dotted_re = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_\-]+)+)\b")
+    for m in dotted_re.finditer(text):
+        cand = m.group(1).strip("`'\".,;:()")
+        lower = cand.lower()
+        if not any(lower.endswith(ext) for ext in (".com", ".org", ".net", ".io", ".json", ".md", ".txt", ".html")):
+            candidates.append(cand)
+
+    # 5. Bullet list items: "* good.vulpy", "- app.views"
+    bullet_re = re.compile(r"^\s*[\*\-]\s*[`'\"]?([a-zA-Z_][a-zA-Z0-9_\.\-]+)[`'\"]?", re.MULTILINE)
+    for m in bullet_re.finditer(text):
+        cand = m.group(1).strip("`'\".,;:()")
+        if cand and cand.lower() not in MODULE_STOPWORDS and not cand.startswith("http"):
+            candidates.append(cand)
+
+    # Deduplicate preserving order
+    seen = set()
+    result = []
+    for c in candidates:
+        if c.lower() not in seen:
+            seen.add(c.lower())
+            result.append(c)
+    return result
 
 
 def check_grounding(
@@ -187,13 +323,17 @@ def check_grounding(
             )
             grounded = False
 
-    known_findings, known_packages = _collect_ground_truth(evidence, tool_results)
+    known_findings, known_packages, known_modules, known_clusters = _collect_ground_truth(evidence, tool_results)
 
-    # Finding IDs explicitly referenced in the user's prompt are valid conversational context
+    # Context explicitly referenced in user's prompt is valid conversational context
     if user_message:
         for ufid in extract_finding_ids(user_message):
             if ufid.lower() not in known_findings:
                 known_findings[ufid.lower()] = {"scores": set()}
+        for umod in extract_mentioned_modules(user_message):
+            known_modules.add(umod.lower())
+        for ucid in extract_mentioned_clusters(user_message):
+            known_clusters.add(ucid.lower())
 
     # ─────────────────────────────────────────────────────────────
     # 2. Extract 12-char hex finding IDs
@@ -204,6 +344,25 @@ def check_grounding(
     for mid in mentioned_ids:
         if mid not in known_findings:
             warnings.append(f"Made-up or unknown finding ID '{mid}' is not in evidence or tool results.")
+            grounded = False
+
+    # ─────────────────────────────────────────────────────────────
+    # 2b. Extract and validate cluster IDs
+    # ─────────────────────────────────────────────────────────────
+    mentioned_clusters = extract_mentioned_clusters(answer_text)
+    for cid in mentioned_clusters:
+        if cid.lower() not in known_clusters and cid.lower().replace("-", "_") not in known_clusters:
+            warnings.append(f"Made-up or unknown cluster ID '{cid}' is not in evidence or tool results.")
+            grounded = False
+
+    # ─────────────────────────────────────────────────────────────
+    # 2c. Extract and validate module names
+    # ─────────────────────────────────────────────────────────────
+    mentioned_modules = extract_mentioned_modules(answer_text)
+    for mod in mentioned_modules:
+        mod_l = mod.lower()
+        if mod_l not in known_modules and not any(km.endswith("." + mod_l) for km in known_modules):
+            warnings.append(f"Made-up or unknown module '{mod}' is not in evidence or tool results.")
             grounded = False
 
     # ─────────────────────────────────────────────────────────────

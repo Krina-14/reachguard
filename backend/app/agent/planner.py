@@ -24,7 +24,25 @@ OFF_TOPIC_PATTERN = re.compile(
 def is_off_topic(text: str) -> bool:
     """Return True if message is unrelated to security or code repository analysis."""
     lower = text.lower()
-    security_keywords = ("finding", "vuln", "cve", "ghsa", "package", "repo", "reach", "auth", "import", "fix", "path")
+    security_keywords = (
+        "finding",
+        "vuln",
+        "cve",
+        "ghsa",
+        "package",
+        "repo",
+        "reach",
+        "auth",
+        "import",
+        "fix",
+        "path",
+        "module",
+        "cluster",
+        "critical",
+        "central",
+        "bus factor",
+        "batch",
+    )
     if any(sk in lower for sk in security_keywords):
         return False
     return bool(OFF_TOPIC_PATTERN.search(lower))
@@ -68,10 +86,14 @@ def plan_intent(
     """Analyze user message and return an ordered sequence of (tool_name, kwargs) calls.
 
     Keyword routing rules:
+    - 'critical' / 'central' / 'important module' / 'bus factor':
+      [critical_modules]
+    - 'cluster' / 'together' / 'batch' / 'related findings':
+      [vulnerability_clusters, list_findings]
     - 'why' / 'rank' / 'prioritiz':
       [list_findings, recall, trace_path (referenced or top), score_finding]
     - 'fix first' / 'priority' / 'what should':
-      [list_findings, choke_points, trace_path for top 3]
+      [list_findings, choke_points, critical_modules, trace_path for top 3]
     - 'what if' / 'add auth' / 'remove':
       [simulate] only when a finding ID and entrypoint/module is identifiable, else clarify
     - 'before' / 'history' / 'seen' / 'decid' / 'remember':
@@ -87,6 +109,14 @@ def plan_intent(
     if is_off_topic(message):
         return [("off_topic", {})]
 
+    # 1. "critical" / "central" / "important module" / "bus factor"
+    if any(kw in text for kw in ("critical", "central", "important module", "bus factor")):
+        return [("critical_modules", {})]
+
+    # 2. "cluster" / "together" / "batch" / "related findings"
+    if any(kw in text for kw in ("cluster", "together", "batch", "related findings")):
+        return [("vulnerability_clusters", {}), ("list_findings", {})]
+
     # Pre-fetch findings to match packages or resolve top findings
     try:
         findings = queries.list_findings(ctx.repo_id)
@@ -97,7 +127,7 @@ def plan_intent(
     if not target_fid and findings:
         target_fid = str(findings[0].get("id"))
 
-    # 1. "why" / "rank" / "prioritiz"
+    # 3. "why" / "rank" / "prioritiz"
     if any(kw in text for kw in ("why", "rank", "prioritiz")):
         plan: list[tuple[str, dict[str, Any]]] = [("list_findings", {})]
         if target_fid:
@@ -110,9 +140,9 @@ def plan_intent(
             plan.append(("recall", {}))
         return plan
 
-    # 2. "fix first" / "priority" / "what should"
+    # 4. "fix first" / "priority" / "what should"
     if any(kw in text for kw in ("fix first", "priority", "what should")):
-        plan = [("list_findings", {}), ("choke_points", {})]
+        plan = [("list_findings", {}), ("choke_points", {}), ("critical_modules", {})]
         top_3 = findings[:3]
         for f in top_3:
             fid = f.get("id")

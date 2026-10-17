@@ -105,4 +105,10 @@ def simulate_whatif(
                 detail=f"Unsupported change type: '{c_type}'. Supported: 'add_auth', 'remove_import'",
             )
 
-    return queries.simulate(repo_id, req.finding_id, raw_changes)
+    try:
+        return queries.simulate(repo_id, req.finding_id, raw_changes)
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"Simulation unsupported: {exc}",
+        ) from exc

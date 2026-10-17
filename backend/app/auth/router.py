@@ -44,13 +44,24 @@ class LoginRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
+    current_password: str | None = None
+    old_password: str | None = None
     new_password: str
+
+    def get_current_password(self) -> str:
+        return self.current_password or self.old_password or ""
+
+
+class UserProfile(BaseModel):
+    id: str
+    email: str
+    role: str
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user: UserProfile | None = None
 
 
 # ── Endpoints ───────────────────────────────────────────────────
@@ -59,7 +70,7 @@ class TokenResponse(BaseModel):
 @auth_router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
 async def login(body: LoginRequest, request: Request) -> TokenResponse:
-    """Authenticate with email + password. Returns a JWT.
+    """Authenticate with email + password. Returns a JWT and user profile.
 
     Rate-limited to 5 attempts per minute per IP.
     Error message is intentionally vague to avoid user enumeration.
@@ -71,7 +82,11 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
             detail="Invalid email or password",
         )
     token = create_access_token(user["id"], user["role"])
-    return TokenResponse(access_token=token)
+    return TokenResponse(
+        access_token=token,
+        user=UserProfile(id=user["id"], email=user["email"], role=user["role"]),
+    )
+
 
 
 @auth_router.get("/me")
@@ -94,7 +109,8 @@ async def change_password(
     """Change the current user's password."""
     from app.auth.security import verify_password
 
-    if not verify_password(body.current_password, user["password_hash"]):
+    current_pw = body.get_current_password()
+    if not current_pw or not verify_password(current_pw, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Current password is incorrect",

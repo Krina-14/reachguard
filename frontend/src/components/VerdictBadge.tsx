@@ -4,7 +4,7 @@ import { VERDICT_CONFIG } from "../lib/verdict";
 import { cn } from "../lib/utils";
 
 interface VerdictBadgeProps {
-  verdict: Verdict;
+  verdict: Verdict | string;
   showNote?: boolean;
   className?: string;
 }
@@ -14,7 +14,7 @@ export const VerdictBadge: React.FC<VerdictBadgeProps> = ({
   showNote = false,
   className,
 }) => {
-  const config = VERDICT_CONFIG[verdict] || VERDICT_CONFIG.unknown;
+  const config = VERDICT_CONFIG[verdict as Verdict] || VERDICT_CONFIG.unknown;
 
   return (
     <div className={cn("inline-flex flex-col gap-1", className)}>

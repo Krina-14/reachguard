@@ -57,7 +57,7 @@ def ready_repo() -> Generator[tuple[str, str, str], None, None]:
     Yields (repo_id, finding_id, decision_id).
     """
     repo_id = str(uuid.uuid4())
-    finding_id = "find-" + uuid.uuid4().hex[:6]
+    finding_id = uuid.uuid4().hex[:12]
     dec_id = "dec-" + uuid.uuid4().hex[:6]
 
     mg = meta_graph()
@@ -390,3 +390,209 @@ def test_decision_lifecycle_and_audit(ready_repo: tuple[str, str, str]) -> None:
     mg = meta_graph()
     audit_rows = run(mg, "MATCH (a:AuditEvent) WHERE a.action CONTAINS 'decision' RETURN a")
     assert len(audit_rows) >= 1
+
+
+# ── Verify F6: What-if Simulation on Reachable Finding ─────────
+
+
+def test_verify_f6_whatif_simulation(ready_repo: tuple[str, str, str]) -> None:
+    """Verify F6: simulate on a reachable finding; the verdict flips or the path count
+
+    changes consistently with the graph; after the call, reload the finding: unchanged.
+    """
+    repo_id, fid, _ = ready_repo
+    analyst_h = _auth_headers("analyst")
+
+    # 1. Baseline: finding is reachable in real graph
+    resp_before = client.get(f"/api/repos/{repo_id}/findings/{fid}", headers=analyst_h)
+    assert resp_before.status_code == 200
+    finding_before = resp_before.json()
+    assert finding_before["verdict"] == "reachable_in_model"
+    initial_paths = finding_before["trace"]["paths"]
+    assert len(initial_paths) == 1
+    assert initial_paths[0]["entrypoint_id"] == "ep-login"
+
+    # 2. Simulate add_auth to ep-login
+    resp_sim = client.post(
+        f"/api/repos/{repo_id}/whatif",
+        json={
+            "finding_id": fid,
+            "changes": [{"type": "add_auth", "entrypoint_id": "ep-login"}],
+        },
+        headers=analyst_h,
+    )
+    assert resp_sim.status_code == 200
+    sim_data = resp_sim.json()
+
+    # Verdict flips from reachable_in_model to no_path_found (or path count changes to 0)
+    assert sim_data["before"]["verdict"] == "reachable_in_model"
+    assert sim_data["after"]["verdict"] == "no_path_found"
+    assert len(sim_data["after"]["paths"]) == 0
+    assert sim_data["after"]["reaching_entrypoints"] == 0
+    assert sim_data["changed"] == [
+        {"finding_id": fid, "from": "reachable_in_model", "to": "no_path_found"}
+    ]
+
+    # 3. Reload finding after the call: MUST BE UNCHANGED
+    resp_reload = client.get(f"/api/repos/{repo_id}/findings/{fid}", headers=analyst_h)
+    assert resp_reload.status_code == 200
+    finding_reloaded = resp_reload.json()
+    assert finding_reloaded["verdict"] == "reachable_in_model"
+    assert len(finding_reloaded["trace"]["paths"]) == 1
+    assert finding_reloaded["trace"]["paths"][0]["entrypoint_id"] == "ep-login"
+
+    # 4. Simulate remove_import from app.auth to pkg1@1.0.0
+    resp_sim_import = client.post(
+        f"/api/repos/{repo_id}/whatif",
+        json={
+            "finding_id": fid,
+            "changes": [
+                {
+                    "type": "remove_import",
+                    "module_id": "app.auth",
+                    "package_id": "pkg1@1.0.0",
+                }
+            ],
+        },
+        headers=analyst_h,
+    )
+    assert resp_sim_import.status_code == 200
+    sim_import_data = resp_sim_import.json()
+    assert sim_import_data["before"]["verdict"] == "reachable_in_model"
+    assert sim_import_data["after"]["verdict"] == "no_path_found"
+    assert len(sim_import_data["after"]["paths"]) == 0
+
+    # 5. Reload finding again: STILL UNCHANGED
+    resp_reload2 = client.get(f"/api/repos/{repo_id}/findings/{fid}", headers=analyst_h)
+    assert resp_reload2.status_code == 200
+    assert resp_reload2.json()["verdict"] == "reachable_in_model"
+    assert len(resp_reload2.json()["trace"]["paths"]) == 1
+
+
+# ── Verify F8: Timeline Memory & Viewer Access Restrictions ────
+
+
+def test_verify_f8_memory_timeline_and_viewer_access(
+    ready_repo: tuple[str, str, str],
+) -> None:
+    """Verify F8:
+    - After F5 (record decision) and F7 (analyst save investigation) actions, the timeline shows the entries in GET /api/repos/{id}/memory.
+    - Create a viewer user, log in as them, check they cannot reach /admin/users (HTTP 403) while being able to view memory (HTTP 200).
+    """
+    from unittest.mock import patch
+    from app.agent.loop import AgentResult
+
+    repo_id, fid, _ = ready_repo
+    analyst_h = _auth_headers("analyst")
+    admin_h = _auth_headers("admin")
+
+    # 1. Action F5: Record a decision
+    resp_dec = client.post(
+        f"/api/repos/{repo_id}/findings/{fid}/decisions",
+        json={
+            "type": "false_positive",
+            "reason": "Verified false positive due to unreachable test harness code.",
+        },
+        headers=analyst_h,
+    )
+    assert resp_dec.status_code == 200
+    dec_id = resp_dec.json()["id"]
+
+    # 2. Action F7: Analyst chats with save=true (saves an investigation)
+    mock_agent_result = AgentResult(
+        answer=f"Detailed investigation for finding {fid}: No reachable path under production configurations.",
+        mode="llm_tools",
+        tool_calls=[
+            {
+                "name": "trace_path",
+                "args": {"finding_id": fid},
+                "ok": True,
+                "summary": "1 path analyzed",
+            }
+        ],
+        evidence={
+            "findings": [{"id": fid}],
+            "traces": [{"finding_id": fid}],
+            "memory": [],
+        },
+        grounded=True,
+        warnings=[],
+    )
+
+    with patch("app.agent.router.run_agent", return_value=mock_agent_result):
+        resp_chat = client.post(
+            f"/api/repos/{repo_id}/agent/chat",
+            json={"message": f"Investigate finding {fid}", "save": True},
+            headers=analyst_h,
+        )
+        assert resp_chat.status_code == 200
+
+    # 3. Check memory timeline: GET /api/repos/{repo_id}/memory
+    resp_mem = client.get(f"/api/repos/{repo_id}/memory", headers=analyst_h)
+    assert resp_mem.status_code == 200
+    mem_data = resp_mem.json()
+
+    # Timeline must show both investigations and decisions
+    assert "investigations" in mem_data and "decisions" in mem_data
+    assert len(mem_data["decisions"]) >= 1
+    assert any(
+        d["id"] == dec_id
+        and d["finding_id"] == fid
+        and d["type"] == "false_positive"
+        for d in mem_data["decisions"]
+    )
+
+    assert len(mem_data["investigations"]) >= 1
+    inv = mem_data["investigations"][0]
+    assert inv["finding_id"] == fid
+
+    # 4. Create a viewer user via Admin API
+    viewer_email = f"viewer_{uuid.uuid4().hex[:6]}@example.com"
+    viewer_pwd = "viewerSecurePassword123!"
+    resp_create_user = client.post(
+        "/api/admin/users",
+        json={"email": viewer_email, "password": viewer_pwd, "role": "viewer"},
+        headers=admin_h,
+    )
+    assert resp_create_user.status_code == 201
+    created_user = resp_create_user.json()
+    assert created_user["email"] == viewer_email
+    assert created_user["role"] == "viewer"
+    assert created_user["active"] is True
+
+    # 5. Verify viewer credentials and create token
+    from app.auth.service import authenticate
+    assert authenticate(viewer_email, viewer_pwd) is not None
+    viewer_token = create_access_token(created_user["id"], created_user["role"])
+    viewer_h = {"Authorization": f"Bearer {viewer_token}"}
+
+    # 6. Verify viewer CAN view memory timeline
+    resp_viewer_mem = client.get(f"/api/repos/{repo_id}/memory", headers=viewer_h)
+    assert resp_viewer_mem.status_code == 200
+    assert len(resp_viewer_mem.json()["decisions"]) >= 1
+
+    # 7. Verify viewer CANNOT reach /admin/users (HTTP 403 Forbidden)
+    resp_viewer_admin_list = client.get("/api/admin/users", headers=viewer_h)
+    assert resp_viewer_admin_list.status_code == 403
+    assert resp_viewer_admin_list.json()["error"]["code"] == 403
+
+    resp_viewer_admin_post = client.post(
+        "/api/admin/users",
+        json={
+            "email": "unauthorized@example.com",
+            "password": "password12345",
+            "role": "admin",
+        },
+        headers=viewer_h,
+    )
+    assert resp_viewer_admin_post.status_code == 403
+    assert resp_viewer_admin_post.json()["error"]["code"] == 403
+
+    resp_viewer_admin_patch = client.patch(
+        f"/api/admin/users/{created_user['id']}",
+        json={"role": "admin"},
+        headers=viewer_h,
+    )
+    assert resp_viewer_admin_patch.status_code == 403
+    assert resp_viewer_admin_patch.json()["error"]["code"] == 403
+

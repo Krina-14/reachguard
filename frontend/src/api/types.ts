@@ -27,8 +27,21 @@ export interface LoginResponse {
 }
 
 export interface ChangePasswordRequest {
-  old_password: string;
+  current_password?: string;
+  old_password?: string;
   new_password: string;
+}
+
+export interface CreateUserRequest {
+  email: string;
+  password: string;
+  role: UserRole;
+}
+
+export interface PatchUserRequest {
+  role?: UserRole;
+  active?: boolean;
+  password?: string;
 }
 
 export interface HealthResponse {
@@ -131,7 +144,9 @@ export interface FindingRow {
   score: number;
   status: FindingStatus;
   owners: string[];
+  risk_accepted_by?: string | null;
 }
+
 
 export interface ScoreWeights {
   reach: number;

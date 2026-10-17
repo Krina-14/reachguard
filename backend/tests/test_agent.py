@@ -270,3 +270,110 @@ def test_guardrail_violation_falls_to_deterministic(monkeypatch: pytest.MonkeyPa
     assert res.mode == "deterministic"
     assert len(res.warnings) > 0
     assert "This is not proof of safety" in res.answer
+
+
+def test_critical_modules_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User asking 'which modules are most critical?' triggers critical_modules tool."""
+    monkeypatch.setattr(
+        queries,
+        "critical_modules",
+        lambda repo_id: [
+            {"module": "app.core", "score": 100.0, "note": "Algorithm: PageRank. Owner: @core-team."},
+            {"module": "app.utils", "score": 85.0, "note": "Algorithm: PageRank. No owner assigned."},
+        ],
+    )
+    monkeypatch.setattr(queries, "list_findings", lambda r: [])
+    monkeypatch.setattr(queries, "recall", lambda r, f: {"investigations": [], "decisions": []})
+
+    fake_client = FakeLLMClient(
+        reachable=True,
+        chat_responses=[
+            {
+                "content": None,
+                "tool_calls": [{"name": "critical_modules", "arguments": {}}],
+            },
+            {
+                "content": "The most critical module is app.core with score 100 based on PageRank.",
+                "tool_calls": [],
+            },
+        ],
+    )
+
+    ctx = ToolContext(repo_id="test-repo", user_role="viewer")
+    res = run_agent(ctx, "which modules are most critical?", client=fake_client)
+
+    assert any(tc["name"] == "critical_modules" for tc in res.tool_calls)
+    assert "app.core" in res.answer
+
+
+def test_vulnerability_clusters_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """User asking 'can any findings be fixed together?' triggers vulnerability_clusters tool."""
+    monkeypatch.setattr(
+        queries,
+        "vulnerability_clusters",
+        lambda repo_id: [
+            {"cluster_id": "cluster_1", "modules": ["app.api", "app.services"], "findings": ["a1b2c3d4e5f6"]},
+        ],
+    )
+    monkeypatch.setattr(
+        queries,
+        "list_findings",
+        lambda repo_id: [
+            {"id": "a1b2c3d4e5f6", "package": "requests", "version": "2.25.0", "score": 80, "verdict": "reachable_in_model"}
+        ],
+    )
+    monkeypatch.setattr(queries, "recall", lambda r, f: {"investigations": [], "decisions": []})
+
+    fake_client = FakeLLMClient(
+        reachable=True,
+        chat_responses=[
+            {
+                "content": None,
+                "tool_calls": [{"name": "vulnerability_clusters", "arguments": {}}],
+            },
+            {
+                "content": "In cluster_1, findings for requests can be addressed together across app.api.",
+                "tool_calls": [],
+            },
+        ],
+    )
+
+    ctx = ToolContext(repo_id="test-repo", user_role="viewer")
+    res = run_agent(ctx, "can any findings be fixed together?", client=fake_client)
+
+    assert any(tc["name"] == "vulnerability_clusters" for tc in res.tool_calls)
+    assert "cluster_1" in res.answer or "requests" in res.answer
+
+
+def test_made_up_module_name_caught_by_guardrails() -> None:
+    """A made-up module name not present in tool results is caught by guardrails."""
+    from app.agent.guardrails import check_grounding
+
+    tool_results = [
+        {
+            "name": "critical_modules",
+            "output": {
+                "ok": True,
+                "modules": [
+                    {"module": "app.core", "score": 100.0, "note": "PageRank"},
+                    {"module": "app.auth", "score": 75.0, "note": "PageRank"},
+                ],
+            },
+        }
+    ]
+
+    # Valid answer with known real module
+    valid_chk = check_grounding(
+        "Module app.core has the highest criticality score of 100.",
+        tool_results=tool_results,
+    )
+    assert valid_chk["grounded"] is True
+
+    # Hallucinated made-up module
+    invalid_chk = check_grounding(
+        "Module made_up_module is the most critical module with score 95.",
+        tool_results=tool_results,
+    )
+    assert invalid_chk["grounded"] is False
+    assert any("made_up_module" in w for w in invalid_chk["warnings"])
+

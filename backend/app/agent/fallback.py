@@ -190,6 +190,39 @@ def build_fallback_answer(
                     return f"Simulation result: Verdicts changed for {ch_desc}."
                 return "Simulation result: No reachability verdicts were altered by the proposed change."
 
+            crit_mods = tr.get("modules")
+            if crit_mods:
+                mod_items = [
+                    f"module '{m.get('module')}' (score: {int(m.get('score', 0))}, {m.get('note', '')})"
+                    for m in crit_mods[:5]
+                ]
+                return f"Top critical modules in the codebase: {'; '.join(mod_items)}."
+
+            clusters = tr.get("clusters")
+            if clusters:
+                cluster_items = [
+                    f"Cluster {c.get('cluster_id')} containing {len(c.get('modules', []))} module(s) and {len(c.get('findings', []))} finding(s)"
+                    for c in clusters
+                ]
+                return f"Vulnerability clusters (remediation batches): {'; '.join(cluster_items)}."
+
+    # Evidence-based modules or clusters fallback
+    evidence_mods = evidence.get("modules", [])
+    if evidence_mods:
+        mod_items = [
+            f"module '{m.get('module')}' (score: {int(m.get('score', 0))}, {m.get('note', '')})"
+            for m in evidence_mods[:5]
+        ]
+        return f"Top critical modules in the codebase: {'; '.join(mod_items)}."
+
+    evidence_clusters = evidence.get("clusters", [])
+    if evidence_clusters:
+        cluster_items = [
+            f"Cluster {c.get('cluster_id')} containing {len(c.get('modules', []))} module(s) and {len(c.get('findings', []))} finding(s)"
+            for c in evidence_clusters
+        ]
+        return f"Vulnerability clusters (remediation batches): {'; '.join(cluster_items)}."
+
     # 3. Overview of findings
     if findings:
         top_list = [f"{f.get('id')} ({f.get('package')}, score: {f.get('score')}, {f.get('verdict')})" for f in findings[:5]]

@@ -361,6 +361,8 @@ def test_tool_schemas_and_registry() -> None:
         "simulate",
         "recall",
         "save_investigation",
+        "critical_modules",
+        "vulnerability_clusters",
     }
 
     assert set(REGISTRY.keys()) == expected_tools
