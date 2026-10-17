@@ -111,18 +111,19 @@ def main() -> int:
             created_dt is None or created_dt < cutoff_time
         )
 
-        cond_source = (
+        is_test_source = (
             source in ("test", "unknown", "test/repo")
-            or source.endswith("repo.zip")
+            or source.endswith(("test/repo", "repo.zip"))
         )
+        cond_source = is_test_source
         cond_stuck = is_stuck_intermediate
         cond_failed = (status == "failed")
 
         should_delete = cond_source or cond_stuck or cond_failed
 
         # NON-NEGOTIABLE SAFEGUARD:
-        # Never delete any repo whose status is ready and source starts with https://github.com/
-        if status == "ready" and source.startswith("https://github.com/"):
+        # Never delete any real repo whose status is ready and source starts with https://github.com/
+        if status == "ready" and source.startswith("https://github.com/") and not is_test_source:
             should_delete = False
 
         if should_delete:
