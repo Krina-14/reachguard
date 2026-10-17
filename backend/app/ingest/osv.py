@@ -128,7 +128,7 @@ def _fetch_with_retries(
     backoff = 0.5
     last_exc: Exception | None = None
 
-    for attempt in range(max_retries):
+    for _attempt in range(max_retries):
         try:
             resp = client.request(method, url, **kwargs)
             if resp.status_code >= 500:

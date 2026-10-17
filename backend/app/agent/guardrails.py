@@ -120,7 +120,7 @@ def _collect_ground_truth(
     def recurse_ingest(item: Any) -> None:
         if isinstance(item, dict):
             # Clusters
-            if "cluster_id" in item and item["cluster_id"]:
+            if item.get("cluster_id"):
                 cid_str = str(item["cluster_id"]).lower()
                 known_clusters.add(cid_str)
                 known_clusters.add(cid_str.replace("-", "_"))

@@ -354,10 +354,10 @@ def extract_zip(
                 target_path = (dest / member_name).resolve()
                 try:
                     target_path.relative_to(dest)
-                except ValueError:
+                except ValueError as exc:
                     raise ZipValidationError(
                         f"Zip-slip detected: member '{member_name}' resolves outside destination directory"
-                    )
+                    ) from exc
 
             # 5. Extract safely and verify streamed uncompressed bytes
             dest.mkdir(parents=True, exist_ok=True)

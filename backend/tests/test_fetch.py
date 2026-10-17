@@ -16,8 +16,6 @@ import zipfile
 from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
-
 from app.ingest.fetch import (
     GitCloneError,
     GitCloneTimeoutError,
@@ -31,6 +29,7 @@ from app.ingest.fetch import (
     iter_python_files,
     validate_git_url,
 )
+from fastapi import HTTPException
 
 # ═════════════════════════════════════════════════════════════════════
 # 1. URL Validation Tests

@@ -18,8 +18,6 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.auth.security import create_access_token
 from app.graph.client import (
     delete_graph_if_exists,
@@ -30,6 +28,7 @@ from app.graph.client import (
 )
 from app.graph.schema import ensure_repo_schema
 from app.main import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -480,6 +479,7 @@ def test_verify_f8_memory_timeline_and_viewer_access(
     - Create a viewer user, log in as them, check they cannot reach /admin/users (HTTP 403) while being able to view memory (HTTP 200).
     """
     from unittest.mock import patch
+
     from app.agent.loop import AgentResult
 
     repo_id, fid, _ = ready_repo

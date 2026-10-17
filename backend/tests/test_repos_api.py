@@ -15,11 +15,10 @@ import uuid
 import zipfile
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app.auth.security import create_access_token
 from app.graph.client import meta_graph, run
 from app.main import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.agent.router import agent_router
 from app.api.findings import findings_router
@@ -106,9 +107,6 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 
 # Starlette's built-in 404/405 raises StarletteHTTPException, not FastAPI's subclass
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
-
 @app.exception_handler(StarletteHTTPException)
 async def starlette_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Catch Starlette-level HTTP errors (404, 405, etc.) in the standard envelope."""

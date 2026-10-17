@@ -72,7 +72,7 @@ def _get_secret() -> str:
 
 def create_access_token(user_id: str, role: str) -> str:
     """Create a signed JWT with sub, role, and exp claims."""
-    now = _dt.datetime.now(_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.UTC)
     payload: dict[str, Any] = {
         "sub": user_id,
         "role": role,
@@ -86,13 +86,13 @@ def decode_access_token(token: str) -> dict[str, Any]:
     """Decode and verify a JWT. Raises 401 on expiry or tamper."""
     try:
         return jwt.decode(token, _get_secret(), algorithms=[_ALGORITHM])
-    except jwt.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
-        )
-    except jwt.InvalidTokenError:
+        ) from exc
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
-        )
+        ) from exc

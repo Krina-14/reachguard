@@ -12,20 +12,16 @@ Tests:
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import socket
 import threading
 import time
-from typing import Any
 
 import pytest
 import uvicorn
-from fastmcp import Client
-
 from app.graph.client import meta_graph, run
 from app.mcp_server import create_app
+from fastmcp import Client
 
 
 def _find_free_port() -> int:

@@ -21,6 +21,12 @@ from app.agent.tools import ToolContext
 from app.graph import queries
 
 
+@pytest.fixture(autouse=True)
+def _mock_empty_global_recall(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate agent unit tests from persistent global cross-repo memory."""
+    monkeypatch.setattr(queries, "global_recall", lambda p: [])
+
+
 class FakeLLMClient:
     """Mock LLMClient for unit testing without network dependencies."""
 

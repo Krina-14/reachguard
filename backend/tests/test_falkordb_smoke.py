@@ -11,9 +11,8 @@ Tests are numbered to match the standalone script in scripts/falkor_smoke.py.
 from __future__ import annotations
 
 import pytest
-from falkordb import FalkorDB
-
 from app.config import settings
+from falkordb import FalkorDB
 
 GRAPH_NAME = "rg_smoke_test"
 COPY_NAME = "rg_smoke_copy"

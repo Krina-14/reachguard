@@ -10,8 +10,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from falkordb import Graph
-
 from app.graph.client import (
     cleanup_sim_graphs,
     delete_graph_if_exists,
@@ -23,6 +21,7 @@ from app.graph.client import (
     sim_graph_name,
 )
 from app.graph.schema import _create_index, ensure_meta_schema, ensure_repo_schema
+from falkordb import Graph
 
 # ── Fixtures ────────────────────────────────────────────────────
 

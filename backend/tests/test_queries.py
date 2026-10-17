@@ -24,8 +24,6 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from falkordb import Graph
-
 from app.graph.client import delete_graph_if_exists, get_db, repo_graph, repo_graph_name
 from app.graph.queries import (
     choke_points,
@@ -41,6 +39,7 @@ from app.graph.queries import (
     trace_paths,
 )
 from app.graph.schema import ensure_repo_schema
+from falkordb import Graph
 
 logger = logging.getLogger(__name__)
 

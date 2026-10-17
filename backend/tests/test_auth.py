@@ -10,11 +10,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.auth.security import create_access_token
-from app.auth.service import create_user, get_user_by_email, update_user
+from app.auth.service import create_user, update_user
 from app.graph.client import meta_graph, run
+from fastapi.testclient import TestClient
 
 # ── Unique prefix per test run ──────────────────────────────────
 

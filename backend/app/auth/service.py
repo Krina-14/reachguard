@@ -26,7 +26,7 @@ def _write_audit(event: str, actor_email: str, detail: str = "") -> None:
     """Create an (:AuditEvent) node linked to the acting user (if found)."""
     g = meta_graph()
     aid = uuid.uuid4().hex
-    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now = _dt.datetime.now(_dt.UTC).isoformat()
     try:
         g.query(
             "CREATE (:AuditEvent {id: $aid, event: $event, actor_email: $email, "
@@ -86,7 +86,7 @@ def create_user(email: str, password: str, role: str) -> dict[str, Any]:
 
     user_id = uuid.uuid4().hex
     pw_hash = hash_password(password)
-    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now = _dt.datetime.now(_dt.UTC).isoformat()
 
     meta_graph().query(
         "CREATE (:User {id: $uid, email: $email, password_hash: $pw, "

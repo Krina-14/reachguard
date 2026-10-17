@@ -15,15 +15,20 @@ Verifies:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Generator
+from collections.abc import Generator
 
 import pytest
-from falkordb import Graph
-
 from app.agent.loop import run_agent
-from app.agent.tools import ToolContext, global_recall as global_recall_tool
+from app.agent.tools import ToolContext
+from app.agent.tools import global_recall as global_recall_tool
 from app.graph import queries
-from app.graph.client import delete_graph_if_exists, global_graph, repo_graph, repo_graph_name, run
+from app.graph.client import (
+    delete_graph_if_exists,
+    global_graph,
+    repo_graph,
+    repo_graph_name,
+    run,
+)
 from app.graph.schema import ensure_global_schema, ensure_repo_schema
 
 

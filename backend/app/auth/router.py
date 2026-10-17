@@ -186,7 +186,7 @@ async def admin_create_user(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A user with this email already exists",
-            )
+            ) from exc
         raise
 
 

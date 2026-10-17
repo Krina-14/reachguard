@@ -18,8 +18,6 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from falkordb import Graph
-
 from app.graph.client import delete_graph_if_exists, repo_graph, repo_graph_name, run
 from app.graph.queries import (
     choke_points,
@@ -30,6 +28,7 @@ from app.graph.queries import (
     vulnerability_clusters,
 )
 from app.graph.schema import ensure_repo_schema
+from falkordb import Graph
 
 
 @pytest.fixture()
