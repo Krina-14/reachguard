@@ -142,8 +142,8 @@ npm run dev
 
 Visit `http://localhost:5173` to explore ReachGuard.
 - Default Admin: `admin@gmail.com` / `Admin@1234`
-- Default Analyst: `analyst@gmail.com` / `Analyst@1234`
-- Default Viewer: `viewer@gmail.com` / `Viewer@1234`
+- Default Analyst: `analyst@reachguard.io` / `Admin@1234`
+- Default Viewer: `viewer@reachguard.io` / `Admin@1234`
 
 ### 5. Verification Commands
 ```bash
