@@ -349,3 +349,39 @@ export interface ChatResponse {
   grounded: boolean;
   warnings: string[];
 }
+
+// ── Control Center & Governance (Contract Section 3) ───────────────
+
+export interface PendingApprovalFinding {
+  id: string;
+  vuln_id: string;
+  package: string;
+  version: string;
+  verdict: Verdict;
+  score: number;
+}
+
+export interface PendingApproval {
+  id: string;
+  type: DecisionType;
+  status: DecisionStatus;
+  reason: string;
+  by: string;
+  created_at: string;
+  expires_at?: string | null;
+  approved_by?: string | null;
+  repo_id: string;
+  repo_source: string;
+  source?: string;
+  finding: PendingApprovalFinding;
+  decision?: Decision;
+}
+
+export interface AuditEvent {
+  id: string;
+  at: string;
+  actor: string;
+  action: string;
+  target: string;
+}
+

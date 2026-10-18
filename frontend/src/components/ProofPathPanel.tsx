@@ -67,8 +67,8 @@ export const ProofPathPanel: React.FC<ProofPathPanelProps> = ({
 
       {/* Breadcrumb with plain language edge tags */}
       <div className="flex items-center flex-wrap gap-1.5 py-1 px-2 bg-bg-card/70 border border-border/70 rounded-lg text-xs font-mono overflow-x-auto">
-        {activePath.nodes.map((node, idx) => {
-          const edge = activePath.edges[idx];
+        {(activePath?.nodes || []).map((node, idx) => {
+          const edge = activePath?.edges?.[idx];
           const edgeType = edge ? edge.type : null;
           const plainEdgeLabel = edgeType
             ? EDGE_LABEL_MAP[edgeType] || edgeType.toLowerCase().replace(/_/g, " ")

@@ -35,6 +35,36 @@ FORBIDDEN_PHRASES: list[str] = [
     "i upgraded",
 ]
 
+# Cypher jargon patterns to reject when user is a viewer
+CYPHER_JARGON_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Cypher keyword", re.compile(r"\bcypher\b", re.IGNORECASE)),
+    ("MATCH query", re.compile(r"\bMATCH\s+(?:\([a-zA-Z0-9_:]*|[a-zA-Z0-9_]+\s*=)", re.IGNORECASE)),
+    ("RETURN statement", re.compile(r"\bRETURN\s+(?:count\(|[a-zA-Z0-9_\*\.]+\s*(?:as|,|\Z))", re.IGNORECASE)),
+    ("Relationship syntax", re.compile(r"\[:[A-Z_]+(?:\*[0-9\.]*)?\]")),
+    ("Cypher node syntax", re.compile(r"\([a-zA-Z0-9_]*:(?:Entrypoint|Module|Package|BlindSpot|Repo)\b")),
+]
+
+# Graph node-type jargon patterns to reject when user is a viewer
+NODE_TYPE_JARGON_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("Node jargon", re.compile(r"\b(?:entrypoint|module|package|blindspot|blind\s+spot)\s+nodes?\b", re.IGNORECASE)),
+    ("Graph node/edge", re.compile(r"\bgraph\s+(?:nodes?|edges?)\b", re.IGNORECASE)),
+    ("Node type/label", re.compile(r"\bnode[\s\-](?:types?|labels?)\b", re.IGNORECASE)),
+    ("Node label prefix", re.compile(r"\b:(?:Entrypoint|Module|Package|BlindSpot)\b")),
+    ("Graph degree jargon", re.compile(r"\b(?:in|out)[\s\-]degree\b", re.IGNORECASE)),
+]
+
+NO_ENTRYPOINTS_SAFETY_IMPLICATIONS: list[str] = [
+    "safe because no entrypoints",
+    "safe since no entrypoints",
+    "safe as no web routes",
+    "completely safe",
+    "entirely safe",
+    "no danger",
+    "harmless",
+    "cannot be exploited because no entrypoints",
+    "not vulnerable because no entrypoints",
+]
+
 # Pattern for score extraction: numbers following the word "score"
 # Matches: "score: 85", "score 85", "score of 85", "score is 85", "score = 85", "score was 85", "score: 85/100"
 SCORE_PATTERN = re.compile(
@@ -318,6 +348,7 @@ def check_grounding(
     tool_results: list[dict[str, Any]] | None = None,
     user_message: str | None = None,
     repo_id: str | None = None,
+    user_role: str | None = None,
 ) -> dict[str, Any]:
     """Verify that answer_text is strictly grounded in evidence and tool results.
 
@@ -335,6 +366,96 @@ def check_grounding(
         if phrase in lower_answer:
             warnings.append(
                 f"Forbidden phrase detected: '{phrase}'. Never state a package is safe or that changes were applied."
+            )
+            grounded = False
+
+    # ─────────────────────────────────────────────────────────────
+    # 1b. Role-aware tone: Viewer responses must not contain Cypher or node-type jargon
+    # ─────────────────────────────────────────────────────────────
+    effective_role = (
+        user_role or (evidence.get("user_role") if isinstance(evidence, dict) else None) or ""
+    ).lower()
+    if effective_role == "viewer":
+        for _desc, pattern in CYPHER_JARGON_PATTERNS:
+            m = pattern.search(answer_text)
+            if m:
+                warnings.append(
+                    f"Cypher jargon detected in viewer response: '{m.group(0)}'. Answers for viewers must use plain words with no Cypher syntax."
+                )
+                grounded = False
+                break
+
+        for _desc, pattern in NODE_TYPE_JARGON_PATTERNS:
+            m = pattern.search(answer_text)
+            if m:
+                warnings.append(
+                    f"Node-type jargon detected in viewer response: '{m.group(0)}'. Answers for viewers must use plain words with no graph node-type jargon."
+                )
+                grounded = False
+                break
+
+    # ─────────────────────────────────────────────────────────────
+    # 1c. Handle reason 'no_entrypoints_detected'
+    # ─────────────────────────────────────────────────────────────
+    has_no_entrypoints_reason = False
+    if evidence and isinstance(evidence, dict):
+        for t in evidence.get("traces", []):
+            if isinstance(t, dict) and t.get("reason") == "no_entrypoints_detected":
+                has_no_entrypoints_reason = True
+                break
+        if not has_no_entrypoints_reason:
+            for f in evidence.get("findings", []):
+                if isinstance(f, dict) and f.get("reason") == "no_entrypoints_detected":
+                    has_no_entrypoints_reason = True
+                    break
+    if not has_no_entrypoints_reason and tool_results:
+        for tr in tool_results:
+            if isinstance(tr, dict):
+                if tr.get("reason") == "no_entrypoints_detected":
+                    has_no_entrypoints_reason = True
+                    break
+                for v in tr.values():
+                    if isinstance(v, dict) and v.get("reason") == "no_entrypoints_detected":
+                        has_no_entrypoints_reason = True
+                        break
+
+    if has_no_entrypoints_reason:
+        # Never imply safety
+        for phrase in NO_ENTRYPOINTS_SAFETY_IMPLICATIONS:
+            if phrase in lower_answer:
+                warnings.append(
+                    f"Forbidden safety implication detected with reason 'no_entrypoints_detected': '{phrase}'. Never imply safety."
+                )
+                grounded = False
+
+        # Must state plainly that no web routes were found, so reachability cannot be judged
+        has_no_routes_plainly = any(
+            phrase in lower_answer
+            for phrase in (
+                "no web route",
+                "no web routes",
+                "no entrypoint",
+                "no public entrypoint",
+            )
+        )
+        has_cannot_judge = any(
+            phrase in lower_answer
+            for phrase in (
+                "cannot be judged",
+                "cannot judge",
+                "can't be judged",
+                "can't judge",
+                "cannot determine",
+                "can't determine",
+                "cannot verify",
+                "can't verify",
+                "unknown",
+            )
+        )
+        if not (has_no_routes_plainly and has_cannot_judge):
+            warnings.append(
+                "When reachability reason is 'no_entrypoints_detected', the response must state plainly that "
+                "no web routes were found, so the tool cannot judge reachability, and never imply safety."
             )
             grounded = False
 

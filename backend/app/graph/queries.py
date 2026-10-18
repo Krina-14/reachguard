@@ -576,14 +576,39 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
         path_node_ids: set[str] = set()
         path_edge_ids: set[str] = set()
 
-        for p in trace.get("paths", []):
-            for n in p.get("nodes", []):
-                path_node_ids.add(str(n["id"]))
-            for e in p.get("edges", []):
-                path_edge_ids.add(str(e["id"]))
-
         nodes_dict: dict[str, dict[str, Any]] = {}
         edges_list: list[dict[str, Any]] = []
+
+        # 1. Pre-seed with all nodes and edges directly from trace paths
+        for p in trace.get("paths", []):
+            p_nodes = p.get("nodes", [])
+            for n in p_nodes:
+                nid = str(n.get("id", ""))
+                if nid:
+                    path_node_ids.add(nid)
+                    if nid not in nodes_dict:
+                        nodes_dict[nid] = {
+                            "id": nid,
+                            "label": n.get("label", ""),
+                            "name": n.get("name", nid),
+                            "props": {},
+                        }
+            p_edges = p.get("edges", [])
+            for idx in range(min(len(p_nodes) - 1, len(p_edges))):
+                src = str(p_nodes[idx].get("id", ""))
+                dst = str(p_nodes[idx + 1].get("id", ""))
+                edge_obj = p_edges[idx]
+                eid = str(edge_obj.get("id") or f"e_{src}_{dst}")
+                etype = str(edge_obj.get("type") or "CONNECTS_TO")
+                if eid:
+                    path_edge_ids.add(eid)
+                if src and dst and not any(e["source"] == src and e["target"] == dst for e in edges_list):
+                    edges_list.append({
+                        "id": eid,
+                        "source": src,
+                        "target": dst,
+                        "type": etype,
+                    })
 
         if path_node_ids:
             neighbor_rows = run(
@@ -623,15 +648,18 @@ def subgraph(repo_id: str, finding_id: str | None) -> dict[str, Any]:
                 """,
                 {"ids": node_id_list},
             )
-            edges_list = [
-                {
-                    "id": str(getattr(er["r"], "id", "")),
-                    "source": er["src"],
-                    "target": er["dst"],
-                    "type": getattr(er["r"], "relation", None) or getattr(er["r"], "type", ""),
-                }
-                for er in edge_rows
-            ]
+            for er in edge_rows:
+                src = er["src"]
+                dst = er["dst"]
+                eid = str(getattr(er["r"], "id", ""))
+                etype = getattr(er["r"], "relation", None) or getattr(er["r"], "type", "")
+                if not any(e["source"] == src and e["target"] == dst for e in edges_list):
+                    edges_list.append({
+                        "id": eid,
+                        "source": src,
+                        "target": dst,
+                        "type": etype,
+                    })
         else:
             direct_rows = run(
                 g,

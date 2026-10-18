@@ -3,10 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/useAuth";
 import { ApiError } from "../api/types";
 import { useDocumentTitle } from "../lib/useDocumentTitle";
+import { getRoleHomeRoute } from "../auth/roleRoutes";
 
 export const LoginPage: React.FC = () => {
   useDocumentTitle("Sign In");
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -23,12 +24,15 @@ export const LoginPage: React.FC = () => {
   }, []);
 
   // Redirect if already authenticated
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || "/";
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
   useEffect(() => {
-    if (isAuthenticated) {
-      navigate(from, { replace: true });
+    if (isAuthenticated && user) {
+      const target = (!from || from === "/" || from === "/login")
+        ? getRoleHomeRoute(user.role)
+        : from;
+      navigate(target, { replace: true });
     }
-  }, [isAuthenticated, navigate, from]);
+  }, [isAuthenticated, user, navigate, from]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -36,8 +40,11 @@ export const LoginPage: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      await login(email.trim(), password);
-      navigate(from, { replace: true });
+      const userProfile = await login(email.trim(), password);
+      const target = (!from || from === "/" || from === "/login")
+        ? getRoleHomeRoute(userProfile.role)
+        : from;
+      navigate(target, { replace: true });
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         if (err.statusCode === 429 || err.code === 429 || err.code === "429") {

@@ -6,6 +6,7 @@ import { useCan } from "../auth/useCan";
 import { apiFetch } from "../api/client";
 import { ChangePasswordModal } from "./ChangePasswordModal";
 import type { HealthResponse } from "../api/types";
+import { ROLE_DESCRIPTIONS } from "../auth/roleRoutes";
 
 export const Header: React.FC = () => {
   const { user, logout } = useAuth();
@@ -198,17 +199,30 @@ export const Header: React.FC = () => {
 
             {/* Dropdown Menu */}
             {isUserMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 rounded-xl bg-bg-surface border border-border shadow-2xl p-1.5 z-50 text-xs space-y-1 animate-fade-in">
-                <div className="px-3 py-2 border-b border-border/70">
-                  <span className="text-[10px] uppercase font-mono text-gray-400 block">
+              <div className="absolute right-0 mt-2 w-72 rounded-xl bg-bg-surface border border-border shadow-2xl p-2 z-50 text-xs space-y-1.5 animate-fade-in">
+                <div className="px-3 py-2.5 border-b border-border/70 bg-bg-card/40 rounded-lg">
+                  <span className="text-[10px] uppercase font-mono text-gray-400 block mb-0.5">
                     Signed in as
                   </span>
-                  <span className="font-semibold text-white truncate block">
+                  <span className="font-semibold text-white truncate block text-xs">
                     {user.email}
                   </span>
-                  <span className="text-[10px] text-gray-400 capitalize">
-                    Role: {user.role}
-                  </span>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                        user.role === "admin"
+                          ? "bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                          : user.role === "analyst"
+                          ? "bg-blue-500/15 text-blue-300 border border-blue-500/30"
+                          : "bg-slate-500/15 text-slate-300 border border-slate-500/30"
+                      }`}
+                    >
+                      {user.role}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-snug mt-2 pt-2 border-t border-border/50">
+                    {ROLE_DESCRIPTIONS[user.role]}
+                  </p>
                 </div>
 
                 {/* Change Password Option */}

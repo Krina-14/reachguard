@@ -166,8 +166,8 @@ export const WhatIfPanel: React.FC<WhatIfPanelProps> = ({
   const afterGraphData: GraphResponse = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [] };
 
-    let nodes = [...graphData.nodes];
-    let edges = [...graphData.edges];
+    let nodes = Array.isArray(graphData.nodes) ? [...graphData.nodes] : [];
+    let edges = Array.isArray(graphData.edges) ? [...graphData.edges] : [];
 
     if (activeChange) {
       if (activeChange.type === "remove_import") {

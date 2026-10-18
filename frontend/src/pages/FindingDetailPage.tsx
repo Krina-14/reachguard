@@ -9,7 +9,7 @@ import { ProofPathPanel } from "../components/ProofPathPanel";
 import { DecisionAndMemoryPanel } from "../components/DecisionAndMemoryPanel";
 import { WhatIfPanel } from "../components/WhatIfPanel";
 import { ChatPanel } from "../components/ChatPanel";
-import type { FindingDetail, GraphResponse, Severity } from "../api/types";
+import type { FindingDetail, GraphResponse, GraphNode, GraphEdge, Severity } from "../api/types";
 import { useDocumentTitle } from "../lib/useDocumentTitle";
 
 export const FindingDetailPage: React.FC = () => {
@@ -47,20 +47,83 @@ export const FindingDetailPage: React.FC = () => {
     enabled: Boolean(repoId && findingId),
   });
 
+  // Effective graph data: prefers API subgraph, falls back cleanly to trace paths
+  const effectiveGraphData: GraphResponse | undefined = useMemo(() => {
+    if (graphData?.nodes && graphData.nodes.length > 0) {
+      return graphData;
+    }
+    const paths = finding?.trace?.paths;
+    if (paths && paths.length > 0) {
+      const nodeMap = new Map<string, GraphNode>();
+      const edges: GraphEdge[] = [];
+      const highlightNodeIds: string[] = [];
+      const highlightEdgeIds: string[] = [];
+
+      paths.forEach((p, pIdx) => {
+        const pNodes = p.nodes || [];
+        const pEdges = p.edges || [];
+
+        pNodes.forEach((node) => {
+          if (!nodeMap.has(node.id)) {
+            nodeMap.set(node.id, {
+              id: node.id,
+              label: node.label,
+              name: node.name || node.id,
+              props: {},
+            });
+          }
+          if (!highlightNodeIds.includes(node.id)) {
+            highlightNodeIds.push(node.id);
+          }
+        });
+
+        for (let i = 0; i < pNodes.length - 1; i++) {
+          const src = pNodes[i].id;
+          const dst = pNodes[i + 1].id;
+          const edgeInfo = pEdges[i];
+          const edgeId = edgeInfo?.id || `e_p${pIdx}_${i}_${src}_${dst}`;
+          const edgeType = edgeInfo?.type || "CONNECTS_TO";
+
+          edges.push({
+            id: edgeId,
+            source: src,
+            target: dst,
+            type: edgeType,
+          });
+          if (!highlightEdgeIds.includes(edgeId)) {
+            highlightEdgeIds.push(edgeId);
+          }
+        }
+      });
+
+      if (nodeMap.size > 0) {
+        return {
+          nodes: Array.from(nodeMap.values()),
+          edges,
+          highlight: {
+            nodes: highlightNodeIds,
+            edges: highlightEdgeIds,
+          },
+        };
+      }
+    }
+    return graphData;
+  }, [graphData, finding?.trace?.paths]);
+
   // Calculate active highlighted nodes & edges based on selected path
   const { activeNodeIds, activeEdgeIds } = useMemo(() => {
     if (!finding?.trace?.paths || finding.trace.paths.length === 0) {
       return {
-        activeNodeIds: graphData?.highlight?.nodes || [],
-        activeEdgeIds: graphData?.highlight?.edges || [],
+        activeNodeIds: effectiveGraphData?.highlight?.nodes || [],
+        activeEdgeIds: effectiveGraphData?.highlight?.edges || [],
       };
     }
     const path = finding.trace.paths[selectedPathIndex] || finding.trace.paths[0];
     return {
-      activeNodeIds: path.nodes.map((n) => n.id),
-      activeEdgeIds: path.edges.map((e) => e.id),
+      activeNodeIds: (path?.nodes || []).map((n) => n.id),
+      activeEdgeIds: (path?.edges || []).map((e) => e.id),
     };
-  }, [finding?.trace?.paths, selectedPathIndex, graphData?.highlight]);
+  }, [finding?.trace?.paths, selectedPathIndex, effectiveGraphData?.highlight]);
 
   const getSeverityBadge = (sev: Severity) => {
     switch (sev) {
@@ -389,9 +452,9 @@ export const FindingDetailPage: React.FC = () => {
                 <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
                   Call Graph Subgraph Visualization
                 </span>
-                {graphData?.nodes && (
+                {Array.isArray(effectiveGraphData?.nodes) && (
                   <span className="text-xs text-gray-400 font-mono">
-                    {graphData.nodes.length} nodes, {graphData.edges.length} edges
+                    {effectiveGraphData.nodes.length} nodes, {effectiveGraphData.edges?.length || 0} edges
                   </span>
                 )}
               </div>
@@ -400,9 +463,9 @@ export const FindingDetailPage: React.FC = () => {
                 <div className="w-full h-[520px] bg-[#090d16] border border-border rounded-xl flex items-center justify-center text-gray-400 text-xs font-mono">
                   Loading graph elements...
                 </div>
-              ) : graphData && graphData.nodes.length > 0 ? (
+              ) : Array.isArray(effectiveGraphData?.nodes) && effectiveGraphData.nodes.length > 0 ? (
                 <CytoscapeGraph
-                  graphData={graphData}
+                  graphData={effectiveGraphData}
                   highlightedNodeIds={activeNodeIds}
                   highlightedEdgeIds={activeEdgeIds}
                 />
@@ -561,7 +624,7 @@ export const FindingDetailPage: React.FC = () => {
                   ? finding.trace.paths[selectedPathIndex] || finding.trace.paths[0]
                   : null
               }
-              graphData={graphData}
+              graphData={effectiveGraphData}
             />
 
             {/* ════════════════════════════════════════════════════════════

@@ -32,7 +32,7 @@ export const CytoscapeGraph: React.FC<CytoscapeGraphProps> = ({
 
   // Initialize and update Cytoscape graph
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !graphData) return;
 
     // Destroy existing instance if any
     if (cyRef.current) {
@@ -49,18 +49,21 @@ export const CytoscapeGraph: React.FC<CytoscapeGraphProps> = ({
     const activeHighlightNodes = new Set(
       highlightedNodeIds !== undefined
         ? highlightedNodeIds
-        : graphData.highlight?.nodes || []
+        : graphData?.highlight?.nodes || []
     );
     const activeHighlightEdges = new Set(
       highlightedEdgeIds !== undefined
         ? highlightedEdgeIds
-        : graphData.highlight?.edges || []
+        : graphData?.highlight?.edges || []
     );
     const hasHighlight = activeHighlightNodes.size > 0;
 
     // Filter valid nodes and build node ID set to prevent dangling edge crashes
     const validNodeIds = new Set<string>();
-    const cyNodes = graphData.nodes.map((node) => {
+    const safeNodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+    const safeEdges = Array.isArray(graphData?.edges) ? graphData.edges : [];
+
+    const cyNodes = safeNodes.map((node) => {
       validNodeIds.add(node.id);
       const isHighlighted = activeHighlightNodes.has(node.id);
       return {
@@ -77,7 +80,7 @@ export const CytoscapeGraph: React.FC<CytoscapeGraphProps> = ({
     });
 
     // Only include edges whose source and target both exist in validNodeIds
-    const cyEdges = graphData.edges
+    const cyEdges = safeEdges
       .filter((edge) => validNodeIds.has(edge.source) && validNodeIds.has(edge.target))
       .map((edge) => {
         const isHighlighted =
@@ -95,7 +98,7 @@ export const CytoscapeGraph: React.FC<CytoscapeGraphProps> = ({
       });
 
     // Identify entrypoint nodes as roots for breadthfirst layout
-    const entrypointNodeIds = graphData.nodes
+    const entrypointNodeIds = safeNodes
       .filter((n) => n.label === "Entrypoint")
       .map((n) => `#${CSS.escape(n.id)}`);
 

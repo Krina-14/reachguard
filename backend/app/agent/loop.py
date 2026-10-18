@@ -20,7 +20,7 @@ from app.agent.fallback import build_fallback_answer
 from app.agent.guardrails import check_grounding
 from app.agent.llm import LLMClient, LLMUnavailable, get_client
 from app.agent.planner import extract_referenced_finding, is_off_topic, plan_intent
-from app.agent.prompts import EXPLAIN_USER_TEMPLATE, SYSTEM_PROMPT
+from app.agent.prompts import EXPLAIN_USER_TEMPLATE, get_system_prompt
 from app.agent.tools import REGISTRY, TOOL_SCHEMAS, ToolContext, recall
 
 logger = logging.getLogger(__name__)
@@ -165,7 +165,12 @@ def run_agent(
     3. deterministic: Rule-based template generation without LLM.
     """
     llm = client or get_client()
-    evidence: dict[str, Any] = {"findings": [], "traces": [], "memory": []}
+    evidence: dict[str, Any] = {
+        "findings": [],
+        "traces": [],
+        "memory": [],
+        "user_role": getattr(ctx, "user_role", "viewer"),
+    }
     executed_tools: list[dict[str, Any]] = []
     warnings: list[str] = []
     switch_to_deterministic = False
@@ -189,7 +194,9 @@ def run_agent(
     # ─────────────────────────────────────────────────────────────
     if llm_reachable:
         recent_history = history[-6:] if history else []
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": get_system_prompt(getattr(ctx, "user_role", "analyst"))}
+        ]
         messages.extend(recent_history)
         messages.append({"role": "user", "content": message})
 
@@ -234,6 +241,7 @@ def run_agent(
                         tool_results=parsed_tool_results,
                         user_message=message,
                         repo_id=ctx.repo_id,
+                        user_role=getattr(ctx, "user_role", "viewer"),
                     )
 
                     if chk["grounded"]:
@@ -268,6 +276,7 @@ def run_agent(
                         tool_results=parsed_tool_results,
                         user_message=message,
                         repo_id=ctx.repo_id,
+                        user_role=getattr(ctx, "user_role", "viewer"),
                     )
                     if chk_retry["grounded"]:
                         return AgentResult(
@@ -438,7 +447,7 @@ def run_agent(
             )
 
             explain_messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": get_system_prompt(getattr(ctx, "user_role", "analyst"))},
                 {"role": "user", "content": explain_user_content},
             ]
 
@@ -451,6 +460,7 @@ def run_agent(
                     tool_results=tool_results_for_explain,
                     user_message=message,
                     repo_id=ctx.repo_id,
+                    user_role=getattr(ctx, "user_role", "viewer"),
                 )
                 if chk["grounded"]:
                     return AgentResult(
@@ -484,6 +494,7 @@ def run_agent(
                     tool_results=tool_results_for_explain,
                     user_message=message,
                     repo_id=ctx.repo_id,
+                    user_role=getattr(ctx, "user_role", "viewer"),
                 )
                 if chk_retry["grounded"]:
                     return AgentResult(
@@ -512,6 +523,7 @@ def run_agent(
             evidence=evidence,
             tool_results=[],
             is_off_topic=True,
+            role=getattr(ctx, "user_role", "viewer"),
         )
         return AgentResult(
             answer=fallback_answer,
@@ -561,6 +573,7 @@ def run_agent(
     fallback_answer = build_fallback_answer(
         evidence=evidence,
         tool_results=tool_results_for_fallback,
+        role=getattr(ctx, "user_role", "viewer"),
     )
 
     chk_fallback = check_grounding(
@@ -569,6 +582,7 @@ def run_agent(
         tool_results=tool_results_for_fallback,
         user_message=message,
         repo_id=ctx.repo_id,
+        user_role=getattr(ctx, "user_role", "viewer"),
     )
 
     return AgentResult(

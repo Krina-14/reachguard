@@ -383,3 +383,174 @@ def test_made_up_module_name_caught_by_guardrails() -> None:
     assert invalid_chk["grounded"] is False
     assert any("made_up_module" in w for w in invalid_chk["warnings"])
 
+
+def test_fallback_handles_no_entrypoints_detected() -> None:
+    """Fallback answer for reason 'no_entrypoints_detected' plainly states no web routes were found, reachability cannot be judged, and never implies safety."""
+    from app.agent.fallback import build_fallback_answer
+
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "flask",
+                "version": "2.0.1",
+                "score": 25,
+                "verdict": "unknown",
+            }
+        ],
+        "traces": [
+            {
+                "finding_id": "112233445566",
+                "verdict": "unknown",
+                "reason": "no_entrypoints_detected",
+                "paths": [],
+                "score_breakdown": {"score": 25, "formula": "formula", "reach": 0.5, "severity": 0.75, "exposure": 0.0},
+            }
+        ],
+    }
+
+    ans = build_fallback_answer(evidence)
+    assert "No web routes were found" in ans
+    assert "cannot judge reachability" in ans
+    assert "This is not proof of safety" in ans
+    # Never implies safety
+    assert "is safe" not in ans.lower()
+    assert "no risk" not in ans.lower()
+
+
+def test_fallback_viewer_role_tone_plain_words() -> None:
+    """Fallback answer for role 'viewer' uses plain words with no Cypher or node-type jargon."""
+    from app.agent.fallback import build_fallback_answer
+
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "requests",
+                "version": "2.25.0",
+                "score": 80,
+                "verdict": "reachable_in_model",
+            }
+        ],
+        "traces": [
+            {
+                "finding_id": "112233445566",
+                "verdict": "reachable_in_model",
+                "reason": "Reachable from 1 public entrypoint(s)",
+                "paths": [
+                    {
+                        "entrypoint": "POST /login",
+                        "nodes": [
+                            {"name": "POST /login"},
+                            {"name": "app.views"},
+                            {"name": "requests@2.25.0"},
+                        ],
+                    }
+                ],
+                "score_breakdown": {
+                    "score": 80,
+                    "formula": "round(100*(0.5*reach+0.3*severity+0.2*exposure))",
+                    "reach": 1.0,
+                    "severity": 0.75,
+                    "exposure": 1.0,
+                },
+            }
+        ],
+    }
+
+    ans_viewer = build_fallback_answer(evidence, role="viewer")
+    # Plain words: "web route", "code", simplified score
+    assert "web route" in ans_viewer.lower()
+    assert "based on reachability and severity" in ans_viewer
+    # No Cypher syntax or node-type jargon
+    assert "formula:" not in ans_viewer
+    assert "graph" not in ans_viewer.lower()
+    assert ":module" not in ans_viewer.lower()
+    assert "entrypoint node" not in ans_viewer.lower()
+
+
+def test_prompts_role_aware_system_prompts() -> None:
+    """System prompts provide role-tailored instructions and handle no_entrypoints_detected."""
+    from app.agent.prompts import SYSTEM_PROMPT, get_system_prompt
+
+    viewer_prompt = get_system_prompt("viewer")
+    assert "viewer" in viewer_prompt.lower()
+    assert "cypher" in viewer_prompt.lower()
+    assert "no_entrypoints_detected" in viewer_prompt
+    assert "no web routes were found" in viewer_prompt
+
+    analyst_prompt = get_system_prompt("analyst")
+    assert analyst_prompt == SYSTEM_PROMPT
+    assert "no_entrypoints_detected" in analyst_prompt
+    assert "no web routes were found" in analyst_prompt
+
+
+def test_verify_dvpwa_finding_no_routes_and_no_safe_wording() -> None:
+    """Verify: ask about a finding in the dvpwa repo: the answer says no routes were detected and includes no 'safe' wording."""
+    from unittest.mock import patch
+
+    ctx = ToolContext(repo_id="dvpwa", user_role="viewer")
+    finding_id = "a1b2c3d4e5f6"
+
+    mock_trace = {
+        "ok": True,
+        "finding_id": finding_id,
+        "verdict": "unknown",
+        "reason": "no_entrypoints_detected",
+        "paths": [],
+        "reaching_entrypoints": 0,
+        "total_public_entrypoints": 0,
+        "blind_spots": [],
+        "score": 30,
+    }
+
+    mock_finding_info = {
+        "ok": True,
+        "findings": [
+            {
+                "id": finding_id,
+                "package": "urllib3",
+                "version": "1.26.4",
+                "score": 30,
+                "verdict": "unknown",
+                "reason": "no_entrypoints_detected",
+            }
+        ],
+    }
+
+    with (
+        patch("app.agent.loop.plan_intent", return_value=[("trace_path", {"finding_id": finding_id})]),
+        patch.dict(
+            "app.agent.loop.REGISTRY",
+            {
+                "trace_path": lambda _ctx, **_kw: mock_trace,
+                "list_findings": lambda _ctx, **_kw: mock_finding_info,
+                "recall": lambda _ctx, **_kw: {"ok": True, "investigations": [], "decisions": []},
+            },
+        ),
+    ):
+        res = run_agent(
+            ctx,
+            f"Is finding {finding_id} reachable in the dvpwa repo?",
+            client=FakeLLMClient(reachable=False),
+        )
+        assert res.grounded is True
+        ans = res.answer.lower()
+
+        # 1. Verify it says no routes were detected / found
+        assert "no web routes were found" in ans or "no routes were detected" in ans
+
+        # 2. Verify it says reachability cannot be judged
+        assert "cannot judge reachability" in ans or "cannot be judged" in ans
+
+        # 3. Verify it includes no "safe" claims / wording
+        words = ans.split()
+        safe_occurrences = [w.strip(".,;:!?()") for w in words if "safe" in w]
+        assert all(w in ("safety", "safety.") for w in safe_occurrences)
+        assert "is safe" not in ans
+        assert "package is safe" not in ans
+        assert "code is safe" not in ans
+        assert "repo is safe" not in ans
+        assert "no risk" not in ans
+        assert "not vulnerable" not in ans
+

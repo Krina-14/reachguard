@@ -8,17 +8,47 @@ import type {
   FindingRow,
   FindingStatus,
   Severity,
+  Verdict,
   ChokePoint,
 } from "../api/types";
 
 interface FindingsDashboardProps {
   repoId: string;
   lockfileKind?: string;
+  publicEntrypoints?: number;
+  noEntrypoints?: boolean;
 }
+
+interface PackageFindingGroup {
+  packageKey: string;
+  packageName: string;
+  packageVersion: string;
+  findings: FindingRow[];
+  count: number;
+  worstSeverity: Severity;
+  bestVerdict: Verdict;
+  highestScore: number;
+}
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  CRITICAL: 4,
+  HIGH: 3,
+  MODERATE: 2,
+  LOW: 1,
+  UNKNOWN: 0,
+};
+
+const VERDICT_RANK: Record<Verdict, number> = {
+  reachable_in_model: 3,
+  unknown: 2,
+  no_path_found: 1,
+};
 
 export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
   repoId,
   lockfileKind,
+  publicEntrypoints,
+  noEntrypoints,
 }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,6 +58,18 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
   const statusFilter = searchParams.get("status") || "all";
   const searchQuery = searchParams.get("q") || "";
   const sortBy = (searchParams.get("sort") as "score" | "severity") || "score";
+
+  // View Mode: grouped by package@version (default) or flat list
+  const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
+
+  // Show no-path findings chip state (default: hidden, only Reachable and Unknown)
+  const [showNoPath, setShowNoPath] = useState<boolean>(false);
+
+  // Expanded package group keys
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+
+  // Modal state
+  const [isScoreModalOpen, setIsScoreModalOpen] = useState<boolean>(false);
 
   // Helper to update a URL search param
   const updateParam = (key: string, value: string) => {
@@ -42,8 +84,17 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
     });
   };
 
-  // Modal state
-  const [isScoreModalOpen, setIsScoreModalOpen] = useState<boolean>(false);
+  const toggleExpand = (packageKey: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(packageKey)) {
+        next.delete(packageKey);
+      } else {
+        next.add(packageKey);
+      }
+      return next;
+    });
+  };
 
   // Build query params for GET /api/repos/{id}/findings
   const queryParams = useMemo(() => {
@@ -65,7 +116,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
 
   // Query filtered findings for the table
   const {
-    data: findings = [],
+    data: rawFindings = [],
     isLoading,
     isError,
     error,
@@ -90,7 +141,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
     queryFn: () => apiFetch<ChokePoint[]>(`/api/repos/${repoId}/choke-points`),
   });
 
-  // Calculate top strip verdict counters from all rows in the repository
+  // Top strip counters
   const counts = useMemo(() => {
     let reachable = 0;
     let unknown = 0;
@@ -105,6 +156,80 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
     return { reachable, unknown, nopath, total: allFindings.length };
   }, [allFindings]);
 
+  // Apply default filter: Reachable and Unknown only, unless showNoPath is active or user chose no_path_found
+  const displayedFindings = useMemo(() => {
+    if (verdictFilter === "no_path_found") {
+      return rawFindings.filter((f) => f.verdict === "no_path_found");
+    }
+    if (verdictFilter !== "all") {
+      return rawFindings;
+    }
+    // Default filter: only reachable and unknown, unless showNoPath is toggled
+    if (!showNoPath) {
+      return rawFindings.filter(
+        (f) => f.verdict === "reachable_in_model" || f.verdict === "unknown"
+      );
+    }
+    return rawFindings;
+  }, [rawFindings, verdictFilter, showNoPath]);
+
+  // Group displayed findings by package@version
+  const groupedFindings: PackageFindingGroup[] = useMemo(() => {
+    const map = new Map<string, FindingRow[]>();
+
+    for (const f of displayedFindings) {
+      const key = `${f.package}@${f.version || "*"}`;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key)!.push(f);
+    }
+
+    const groups: PackageFindingGroup[] = [];
+
+    for (const [key, items] of map.entries()) {
+      let worstSev: Severity = "UNKNOWN";
+      let maxSevRank = -1;
+      let bestVer: Verdict = "no_path_found";
+      let maxVerRank = -1;
+      let highestScore = 0;
+
+      for (const item of items) {
+        const sRank = SEVERITY_RANK[item.severity] ?? 0;
+        if (sRank > maxSevRank) {
+          maxSevRank = sRank;
+          worstSev = item.severity;
+        }
+
+        const vRank = VERDICT_RANK[item.verdict] ?? 0;
+        if (vRank > maxVerRank) {
+          maxVerRank = vRank;
+          bestVer = item.verdict;
+        }
+
+        if ((item.score ?? 0) > highestScore) {
+          highestScore = item.score ?? 0;
+        }
+      }
+
+      const [pkg, ver] = key.split("@");
+
+      groups.push({
+        packageKey: key,
+        packageName: pkg,
+        packageVersion: ver,
+        findings: items,
+        count: items.length,
+        worstSeverity: worstSev,
+        bestVerdict: bestVer,
+        highestScore,
+      });
+    }
+
+    // Sort groups by highestScore descending
+    groups.sort((a, b) => b.highestScore - a.highestScore);
+    return groups;
+  }, [displayedFindings]);
 
   const getSeverityBadge = (severity: Severity) => {
     switch (severity) {
@@ -140,6 +265,18 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
           </span>
         );
     }
+  };
+
+  // Severity badge for group row: Unrated when UNKNOWN
+  const getGroupWorstSeverityBadge = (severity: Severity) => {
+    if (severity === "UNKNOWN") {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-500/20 text-slate-400 border border-slate-500/35 uppercase">
+          Unrated
+        </span>
+      );
+    }
+    return getSeverityBadge(severity);
   };
 
   const getStatusBadge = (status: FindingStatus) => {
@@ -184,8 +321,37 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
     return "bg-slate-400 text-slate-400";
   };
 
+  const hasNoPublicEntrypoints = publicEntrypoints === 0 || Boolean(noEntrypoints);
+
   return (
     <div className="space-y-6">
+      {/* ════════════════════════════════════════════════════════════════
+          NO WEB ROUTES BANNER (WHEN STATS SHOW 0 PUBLIC ENTRYPOINTS)
+          ════════════════════════════════════════════════════════════════ */}
+      {hasNoPublicEntrypoints && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3 shadow-sm">
+          <svg
+            className="w-5 h-5 text-amber-400 shrink-0 mt-0.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <div className="space-y-1">
+            <span className="font-bold text-amber-300 block">
+              Analysis Notice:
+            </span>
+            <p className="leading-relaxed">
+              No web routes were detected in this repository (Python Flask and FastAPI only). Verdicts can&apos;t be judged.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ════════════════════════════════════════════════════════════════
           TOP STRIP: THREE VERDICT COUNTERS
           ════════════════════════════════════════════════════════════════ */}
@@ -260,122 +426,51 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-slate-400" />
-              No Path Found in Model
+              No Path Found
             </span>
             <span className="text-2xl font-bold font-mono text-white">
               {counts.nopath}
             </span>
           </div>
           <p className="text-[11px] text-gray-400 mt-1">
-            No execution flow found in model (Not proof of safety)
+            No active route found connecting public entrypoints to package
           </p>
         </div>
-
       </div>
 
       {/* ════════════════════════════════════════════════════════════════
-          ALWAYS VISIBLE LEGEND & SCORE INFO CARD
-          ════════════════════════════════════════════════════════════════ */}
-      <div className="bg-bg-surface border border-border rounded-xl p-4 md:p-5 shadow-md">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-300">
-                Reachability Verdict Legend
-              </h3>
-              <span className="text-gray-600">|</span>
-              <span className="text-xs text-amber-400/90 font-medium">
-                "No path found" is not proof of safety.
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
-                <span className="text-white font-medium">Reachable</span>: Entrypoint
-                leads directly to package AST call.
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                <span className="text-white font-medium">Unknown</span>: Blind spots
-                prevent complete static verification.
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
-                <span className="text-white font-medium">No path found</span>: No
-                call chain in static graph.
-              </div>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsScoreModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-bg-card hover:bg-bg-subtle border border-border text-xs text-accent hover:text-white transition-colors flex-shrink-0 cursor-pointer"
-          >
-            <svg
-              className="w-3.5 h-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
-            </svg>
-            <span>How is the score computed?</span>
-          </button>
-        </div>
-      </div>
-
-      {/* ════════════════════════════════════════════════════════════════
-          CHOKE-POINTS CARD: UPGRADE RECOMMENDATIONS
+          TOP CHOKE POINTS SUMMARY
           ════════════════════════════════════════════════════════════════ */}
       {chokePoints && chokePoints.length > 0 && (
-        <div className="bg-bg-surface border border-accent/30 rounded-xl p-5 shadow-lg relative overflow-hidden">
-          <div className="flex items-start gap-3 mb-4">
-            <div className="w-8 h-8 rounded-lg bg-accent/15 border border-accent/30 text-accent flex items-center justify-center flex-shrink-0">
-              <svg
-                className="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-              </svg>
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>Choke Points</span>
-                <span className="text-[10px] uppercase font-mono px-2 py-0.2 rounded bg-accent/20 text-accent">
-                  High Impact
-                </span>
+        <div className="bg-bg-surface border border-accent/30 rounded-xl p-4 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/30 flex items-center justify-center text-accent">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                </svg>
+              </div>
+              <h3 className="text-sm font-semibold text-white">
+                Top Remediation Choke Points
               </h3>
-              <p className="text-xs text-gray-300 mt-0.5">
-                Upgrade or remove these packages to clear the most reachable findings
-              </p>
             </div>
+            <span className="text-xs text-gray-400">
+              Fixing these libraries yields maximum vulnerability reduction
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            {chokePoints.map((cp) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {chokePoints.slice(0, 3).map((cp) => (
               <div
                 key={`${cp.package}@${cp.version}`}
                 onClick={() => updateParam("q", cp.package)}
-                className="p-3 rounded-lg bg-bg-card hover:bg-bg-subtle border border-border hover:border-accent/40 transition-all cursor-pointer group"
-                title={`Click to filter findings for ${cp.package}`}
+                className="bg-bg-card border border-border hover:border-accent/40 rounded-lg p-3 transition-colors cursor-pointer group"
               >
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="font-mono font-bold text-white group-hover:text-accent transition-colors truncate">
-                    {cp.package}
-                  </span>
-                  <span className="text-[11px] text-gray-400 font-mono">
-                    {cp.version || "*"}
-                  </span>
+                <div className="font-mono text-xs font-semibold text-white group-hover:text-accent transition-colors truncate">
+                  {cp.package}
+                  <span className="text-gray-400 font-normal">@{cp.version}</span>
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-gray-400 mt-2 pt-2 border-t border-border/60">
+                <div className="flex items-center justify-between mt-1 text-xs text-gray-400">
                   <span>Clears findings:</span>
                   <span className="font-bold text-red-400 font-mono">
                     {cp.clears_findings}
@@ -388,7 +483,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
       )}
 
       {/* ════════════════════════════════════════════════════════════════
-          SEARCH & FILTER TOOLBAR
+          SEARCH & FILTER TOOLBAR + VIEW MODE TOGGLE + NO-PATH CHIP
           ════════════════════════════════════════════════════════════════ */}
       <div className="bg-bg-surface border border-border rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Search input */}
@@ -420,15 +515,59 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
           )}
         </div>
 
-        {/* Filter select inputs */}
+        {/* Filter select inputs and View Mode Toggle */}
         <div className="flex items-center gap-3 w-full md:w-auto flex-wrap">
-          {/* Verdict Filter */}
+          {/* Show no-path findings chip */}
+          {verdictFilter === "all" && counts.nopath > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowNoPath(!showNoPath)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                showNoPath
+                  ? "bg-slate-500/25 text-slate-200 border-slate-400/50 shadow-sm"
+                  : "bg-bg-card hover:bg-bg-subtle text-gray-400 border-border"
+              }`}
+            >
+              <span>{showNoPath ? "Hide no-path findings" : "Show no-path findings"}</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/30 font-mono">
+                {counts.nopath}
+              </span>
+            </button>
+          )}
+
+          {/* View Mode Toggle (Grouped vs Flat) */}
+          <div className="flex items-center bg-bg-card p-1 rounded-lg border border-border text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode("grouped")}
+              className={`px-3 py-1 rounded font-medium transition-colors cursor-pointer ${
+                viewMode === "grouped"
+                  ? "bg-accent text-white shadow-sm font-semibold"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Grouped by Package
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("flat")}
+              className={`px-3 py-1 rounded font-medium transition-colors cursor-pointer ${
+                viewMode === "flat"
+                  ? "bg-accent text-white shadow-sm font-semibold"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Flat List
+            </button>
+          </div>
+
+          {/* Verdict Filter Dropdown */}
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <span>Verdict:</span>
             <select
               value={verdictFilter}
               onChange={(e) => updateParam("verdict", e.target.value)}
-              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent"
+              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent cursor-pointer"
             >
               <option value="all">All Verdicts</option>
               <option value="reachable_in_model">Reachable in Model</option>
@@ -443,7 +582,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
             <select
               value={statusFilter}
               onChange={(e) => updateParam("status", e.target.value)}
-              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent"
+              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent cursor-pointer"
             >
               <option value="all">All Statuses</option>
               <option value="open">Open</option>
@@ -460,7 +599,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
             <select
               value={sortBy}
               onChange={(e) => updateParam("sort", e.target.value)}
-              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent"
+              className="bg-bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-accent cursor-pointer"
             >
               <option value="score">Score (Default)</option>
               <option value="severity">Severity</option>
@@ -469,9 +608,8 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
         </div>
       </div>
 
-
       {/* ════════════════════════════════════════════════════════════════
-          FINDINGS DATA TABLE
+          FINDINGS DATA TABLE (GROUPED OR FLAT)
           ════════════════════════════════════════════════════════════════ */}
       <div className="bg-bg-surface border border-border rounded-xl shadow-lg overflow-hidden">
         {isLoading && (
@@ -507,7 +645,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
             </p>
             <button
               onClick={() => refetch()}
-              className="px-3 py-1.5 bg-bg-card border border-red-500/40 rounded text-white text-xs hover:bg-bg-subtle"
+              className="px-3 py-1.5 bg-bg-card border border-red-500/40 rounded text-white text-xs hover:bg-bg-subtle cursor-pointer"
             >
               Retry
             </button>
@@ -515,7 +653,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
         )}
 
         {/* Empty State */}
-        {!isLoading && !isError && findings.length === 0 && (
+        {!isLoading && !isError && displayedFindings.length === 0 && (
           <div className="p-12 text-center max-w-xl mx-auto space-y-3">
             <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 mx-auto flex items-center justify-center">
               <svg
@@ -533,8 +671,12 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
               No Findings Matching Filter
             </h3>
             <p className="text-xs text-gray-400 leading-relaxed">
-              No known vulnerabilities found for the pinned dependencies. This is
-              data from OSV.dev, not proof of safety.
+              No vulnerabilities matching your active filters were found in this repository.
+              {!showNoPath && counts.nopath > 0 && (
+                <span className="block mt-1 text-gray-300">
+                  {counts.nopath} no-path findings are hidden by default. Click &quot;Show no-path findings&quot; to inspect them.
+                </span>
+              )}
             </p>
             {(!lockfileKind || lockfileKind === "none") && (
               <p className="text-xs text-amber-400/90 font-mono">
@@ -544,8 +686,181 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
           </div>
         )}
 
-        {/* Table Content */}
-        {!isLoading && !isError && findings.length > 0 && (
+        {/* ── 1. GROUPED VIEW (DEFAULT) ────────────────────────────────── */}
+        {!isLoading && !isError && displayedFindings.length > 0 && viewMode === "grouped" && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-border bg-bg-card/70 text-gray-400 font-semibold uppercase tracking-wider text-[11px]">
+                  <th className="py-3 px-4 w-10"></th>
+                  <th className="py-3 px-4">Package</th>
+                  <th className="py-3 px-4 w-32">Findings</th>
+                  <th className="py-3 px-4 w-32">Worst Severity</th>
+                  <th className="py-3 px-4 w-44">Best Verdict</th>
+                  <th className="py-3 px-4 w-32 text-right">Highest Score</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {groupedFindings.map((group) => {
+                  const isExpanded = expandedKeys.has(group.packageKey);
+                  const scoreColors = getScoreColor(group.highestScore);
+
+                  return (
+                    <React.Fragment key={group.packageKey}>
+                      {/* Parent Group Row */}
+                      <tr
+                        onClick={() => toggleExpand(group.packageKey)}
+                        className={`hover:bg-bg-card/60 transition-colors cursor-pointer select-none ${
+                          isExpanded ? "bg-bg-card/40" : ""
+                        }`}
+                      >
+                        {/* Expand/Collapse Chevron */}
+                        <td className="py-3 px-4 text-gray-400">
+                          <svg
+                            className={`w-4 h-4 transition-transform ${isExpanded ? "rotate-90 text-accent" : ""}`}
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </td>
+
+                        {/* Package @ Version */}
+                        <td className="py-3 px-4 font-mono font-semibold text-white">
+                          <span>{group.packageName}</span>
+                          <span className="text-accent ml-1 font-normal text-[11px]">
+                            @{group.packageVersion}
+                          </span>
+                        </td>
+
+                        {/* Count of findings */}
+                        <td className="py-3 px-4">
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-bg-card border border-border text-gray-200">
+                            {group.count} {group.count === 1 ? "finding" : "findings"}
+                          </span>
+                        </td>
+
+                        {/* Worst Severity (Unrated when UNKNOWN) */}
+                        <td className="py-3 px-4">
+                          {getGroupWorstSeverityBadge(group.worstSeverity)}
+                        </td>
+
+                        {/* Best Verdict */}
+                        <td className="py-3 px-4">
+                          <VerdictBadge verdict={group.bestVerdict} />
+                        </td>
+
+                        {/* Highest Score */}
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="font-mono font-bold text-sm text-white w-7">
+                              {group.highestScore}
+                            </span>
+                            <div className="w-12 h-1.5 bg-bg-card rounded-full overflow-hidden border border-border/80">
+                              <div
+                                className={`h-full rounded-full ${scoreColors.split(" ")[0]}`}
+                                style={{ width: `${Math.min(100, group.highestScore)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Nested Individual Findings Rows when Expanded */}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={6} className="bg-bg-card/25 p-0">
+                            <div className="p-3 sm:p-4 space-y-2 border-y border-border/70">
+                              <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 font-mono px-1">
+                                Individual Findings for {group.packageKey} ({group.findings.length})
+                              </div>
+                              <div className="space-y-2">
+                                {group.findings.map((f) => {
+                                  const isRiskAccepted = f.status === "risk_accepted";
+                                  const fScoreColors = getScoreColor(f.score);
+
+                                  return (
+                                    <div
+                                      key={f.id}
+                                      onClick={() =>
+                                        navigate(`/repos/${repoId}/findings/${f.id}`)
+                                      }
+                                      className={`p-3 rounded-lg border transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer ${
+                                        isRiskAccepted
+                                          ? "bg-purple-950/15 border-purple-500/30"
+                                          : "bg-bg-surface border-border hover:border-gray-500"
+                                      }`}
+                                    >
+                                      <div className="space-y-1 min-w-0 flex-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <a
+                                            href={`https://osv.dev/vulnerability/${f.vuln_id}`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="font-mono font-bold text-xs text-accent hover:underline inline-flex items-center gap-1"
+                                          >
+                                            <span>{f.vuln_id}</span>
+                                            <svg
+                                              className="w-3 h-3 opacity-60"
+                                              viewBox="0 0 24 24"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              strokeWidth="2"
+                                            >
+                                              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                              <polyline points="15 3 21 3 21 9" />
+                                              <line x1="10" y1="14" x2="21" y2="3" />
+                                            </svg>
+                                          </a>
+                                          {getSeverityBadge(f.severity)}
+                                          <VerdictBadge verdict={f.verdict} />
+                                          {getStatusBadge(f.status)}
+                                        </div>
+                                        {f.summary && (
+                                          <p className="text-xs text-gray-300 line-clamp-1">
+                                            {f.summary}
+                                          </p>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-mono font-bold text-xs text-white">
+                                            Score: {f.score}
+                                          </span>
+                                          <div className="w-10 h-1.5 bg-bg-card rounded-full overflow-hidden border border-border/80">
+                                            <div
+                                              className={`h-full rounded-full ${fScoreColors.split(" ")[0]}`}
+                                              style={{ width: `${Math.min(100, f.score)}%` }}
+                                            />
+                                          </div>
+                                        </div>
+
+                                        <span className="text-xs text-accent hover:underline font-medium">
+                                          View details →
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── 2. FLAT LIST VIEW ────────────────────────────────────────── */}
+        {!isLoading && !isError && displayedFindings.length > 0 && viewMode === "flat" && (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -560,7 +875,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
-                {findings.map((f) => {
+                {displayedFindings.map((f) => {
                   const isRiskAccepted = f.status === "risk_accepted";
                   const scoreColors = getScoreColor(f.score);
 
@@ -609,7 +924,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
                         </span>
                       </td>
 
-                      {/* Vulnerability ID (external link to OSV.dev) */}
+                      {/* Vulnerability ID */}
                       <td className="py-3 px-4">
                         <a
                           href={`https://osv.dev/vulnerability/${f.vuln_id}`}
@@ -654,7 +969,7 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
                         )}
                       </td>
 
-                      {/* Status Chip & Risk Accepted By tag */}
+                      {/* Status Chip */}
                       <td className="py-3 px-4 text-right">
                         <div className="flex flex-col items-end gap-1">
                           {getStatusBadge(f.status)}
@@ -685,3 +1000,5 @@ export const FindingsDashboard: React.FC<FindingsDashboardProps> = ({
     </div>
   );
 };
+
+export default FindingsDashboard;

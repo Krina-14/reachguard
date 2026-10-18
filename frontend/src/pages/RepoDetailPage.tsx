@@ -573,6 +573,8 @@ export const RepoDetailPage: React.FC = () => {
             <FindingsDashboard
               repoId={repo.id}
               lockfileKind={stats.lockfile_kind}
+              publicEntrypoints={stats.public_entrypoints}
+              noEntrypoints={stats.no_entrypoints}
             />
           </div>
         )}

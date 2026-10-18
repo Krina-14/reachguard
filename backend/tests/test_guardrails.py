@@ -281,3 +281,129 @@ def test_loop_retry_and_switch_to_deterministic() -> None:
         res2 = run_agent(ctx, "Analyze finding 112233445566", client=mock_client2)
         assert res2.mode == "deterministic"
         assert res2.grounded is True
+
+
+def test_viewer_cypher_jargon_rejected() -> None:
+    """Cypher syntax or queries in an answer for a viewer must fail grounding."""
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "requests",
+                "version": "2.25.0",
+                "score": 80,
+                "verdict": "reachable_in_model",
+            }
+        ]
+    }
+    answer = "Finding 112233445566 was evaluated via MATCH (e:Entrypoint)-[:HANDLED_BY]->(m:Module) with score 80."
+
+    # Fails for viewer
+    res_viewer = check_grounding(answer, evidence=evidence, tool_results=[], user_role="viewer")
+    assert res_viewer["grounded"] is False
+    assert any("Cypher jargon detected in viewer response" in w for w in res_viewer["warnings"])
+
+    # Analyst is allowed technical details
+    res_analyst = check_grounding(answer, evidence=evidence, tool_results=[], user_role="analyst")
+    assert not any("Cypher jargon" in w for w in res_analyst["warnings"])
+
+
+def test_viewer_node_type_jargon_rejected() -> None:
+    """Graph node-type jargon in an answer for a viewer must fail grounding."""
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "requests",
+                "version": "2.25.0",
+                "score": 80,
+                "verdict": "reachable_in_model",
+            }
+        ]
+    }
+    answer = "Finding 112233445566 is reachable in model because the Entrypoint node connects to the Module node with score 80."
+
+    res = check_grounding(answer, evidence=evidence, tool_results=[], user_role="viewer")
+    assert res["grounded"] is False
+    assert any("Node-type jargon detected in viewer response" in w for w in res["warnings"])
+
+
+def test_viewer_plain_language_passes() -> None:
+    """An answer for a viewer using plain language without Cypher or node jargon must pass."""
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "requests",
+                "version": "2.25.0",
+                "score": 80,
+                "verdict": "reachable_in_model",
+            }
+        ]
+    }
+    answer = "Finding 112233445566 in requests 2.25.0 is reachable in model from public web route POST /login with score 80."
+
+    res = check_grounding(answer, evidence=evidence, tool_results=[], user_role="viewer")
+    assert res["grounded"] is True
+    assert len(res["warnings"]) == 0
+
+
+def test_no_entrypoints_detected_plain_wording_required() -> None:
+    """When reason is 'no_entrypoints_detected', answer must state plainly that no web routes were found so reachability cannot be judged."""
+    evidence = {
+        "findings": [
+            {
+                "id": "112233445566",
+                "package": "requests",
+                "version": "2.25.0",
+                "score": 25,
+                "verdict": "unknown",
+                "reason": "no_entrypoints_detected",
+            }
+        ],
+        "traces": [
+            {
+                "finding_id": "112233445566",
+                "verdict": "unknown",
+                "reason": "no_entrypoints_detected",
+                "paths": [],
+                "score_breakdown": {"score": 25},
+            }
+        ],
+    }
+
+    # Incomplete answer lacking the plain explanation fails grounding
+    bad_answer = "Finding 112233445566 is unknown with score 25."
+    res_bad = check_grounding(bad_answer, evidence=evidence, tool_results=[])
+    assert res_bad["grounded"] is False
+    assert any("no web routes were found, so the tool cannot judge reachability" in w for w in res_bad["warnings"])
+
+    # Proper answer with plain explanation passes
+    good_answer = (
+        "Finding 112233445566 in requests 2.25.0 is unknown with score 25. "
+        "No web routes were found in this repository, so the tool cannot judge reachability. "
+        "This is not proof of safety."
+    )
+    res_good = check_grounding(good_answer, evidence=evidence, tool_results=[])
+    assert res_good["grounded"] is True
+
+
+def test_no_entrypoints_detected_safety_implications_rejected() -> None:
+    """When reason is 'no_entrypoints_detected', any statement implying safety must be rejected."""
+    evidence = {
+        "traces": [
+            {
+                "finding_id": "112233445566",
+                "verdict": "unknown",
+                "reason": "no_entrypoints_detected",
+                "paths": [],
+                "score_breakdown": {"score": 25},
+            }
+        ]
+    }
+    answer = (
+        "Finding 112233445566 is unknown. No web routes were found, so the finding is safe because no entrypoints exist."
+    )
+    res = check_grounding(answer, evidence=evidence, tool_results=[])
+    assert res["grounded"] is False
+    assert any("Never imply safety" in w or "is safe" in w for w in res["warnings"])
